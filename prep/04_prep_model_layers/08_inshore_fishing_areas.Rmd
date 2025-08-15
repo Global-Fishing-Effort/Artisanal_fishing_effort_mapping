@@ -1,0 +1,364 @@
+---
+title: "Data wrangling - Inshore fishing area"
+author: "Gage Clawson (IMAS)"
+date: '`r format(Sys.time(), "%m/%d/%Y")`'
+output: 
+  pdf_document: 
+    number_sections: yes
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: console
+---
+
+# Summary
+
+Prep a inshore fishing area layer to apply to our predictions so that we can cut out cells that are unsuitable for fishing due to uninhabited coastlines. We consider cells which are <=50km from shore AND <=200m depth AND adjacent to a population (i.e., <=50km from a populated area)
+
+
+from SAUP:
+ > Thus, while industrial fisheries can have access to all waters within and outside EEZs, we define all small-scale fisheries as being restricted to more inshore, coastal waters. Therefore, we make use of the Inshore Fishing Area (IFA) concept as defined by Chuenpagdee et al. (2006), who defined IFA as: the area that extends from shore to either 50 km offshore or to the 200 m depth contour, whichever comes first.  We amend this definition slightly: only territories that are inhabited and have local fisheries are defined as having an IFA. Thus, uninhabited territories, such as many sub-Antarctic islands, which are not inhabited (or only host government employees as part of research or meteorological stations) do not have IFAs. The areas in km2 are measured similar to EEZ and shelf areas.
+
+
+
+Reference: 
+https://www.isimip.org/gettingstarted/input-data-bias-adjustment/details/124/ 
+
+1. Coastal land strip (inland only):
+Take land polygons and keep just the band within, say, 10 km inland of the shoreline. This avoids counting towns far inland.
+
+2. Populated coastal land (binary):
+Mark a coastal land cell “populated” if either:
+
+population density ≥ pmin_dens (e.g., 1 person/km²), or
+
+local population within a one pixel radius (~20-60km?) ≥ 200 total population 
+This combo suppresses tiny outposts but keeps small coastal towns.
+
+3. Distance-to-populated-coast (over the sea):
+Compute a distance transform from sea cells to the nearest populated coastal land cell. Sea cells with distance ≤ 50 km are considered “adjacent to inhabited coast”.
+
+4. IFA inhabited mask:
+IFA_inhabited = IFA_basic ∩ AdjacentToInhabitedCoast, where
+IFA_basic = (distance_from_shore_km ≤ 50) OR (depth_m ≤ 200) on your fishing grid.
+
+
+
+```{r echo = FALSE}
+# This chunk sets up default settings for all chunks below
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,fig.width = 7.5,fig.height = 5,dev = 'png',dpi=300)
+```
+
+```{r include=FALSE}
+# Load all necessary packages
+library(tidyverse)
+library(glue)
+library(terra)
+library(here)
+library(sf)
+library(rnaturalearth)
+
+options(scipen = 20)
+
+source(here("R/dir.R"))
+
+data_directory <- rdsi_raw_dir
+
+```
+
+# Defining our global grid
+
+```{r}
+pixel_size <- 0.5
+
+mollweide_projection <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+
+# Read in data_grid, generated in data_wrangling.Rmd
+# We will do spatial joining in Mollweide, for proper calculations
+# Note that data grid still retains lat and lon columns, for joining with non-spatial tibbles
+# For Mollweide, always wrap around dateline, then transform, then calculate areas at end
+
+data_grid <- data.table::fread(here::here("data/model_features/global_grid.csv")) %>%
+  st_drop_geometry %>%
+  dplyr::select(lon, lat, pixel_id)
+
+data_rast <- rast(data_grid, type = "xyz")
+
+```
+
+Read in population data for 1950 to 2020. Luckily it is alread half degree. 
+```{r}
+# siconc monthly at 15' (units: 0–1; if %, divide by 100)
+hist_nc  <- (file.path(data_directory, "ISIMIP/population/population_histsoc_30arcmin_annual_1901_2014.nc"))
+future_nc <- (file.path(data_directory, "ISIMIP/population/population_2015soc_30arcmin_annual_2015_2100.nc"))
+
+names(sds(hist_nc))
+names(sds(future_nc))
+
+# Read ONLY the "total-population" variable from each file
+pop_hist   <- rast(hist_nc,   subds = "total-population")[[50:114]] # 1950 - 2010
+pop_future <- rast(future_nc, subds = "total-population")[[1:10]] # 2015-2024
+
+pop <- c(pop_hist, pop_future) %>%
+  resample(data_rast, method = "bilinear")
+
+
+plot(pop[[1]]) # cool. 
+
+years <- 1950:2024
+
+names(pop) <- years
+
+```
+
+```{r}
+## 2) Land / sea and projection for metric distances
+# Use Mollweide for global distances (meters)
+crs_proj <- "ESRI:54030"
+
+land_sf <- rnaturalearth::ne_countries(scale = "large", returnclass = "sf")
+land_v  <- vect(land_sf)
+
+# Project population stack & land to metric CRS
+pop_proj  <- project(pop, crs_proj, method = "near")  # counts -> use "near"
+land_proj <- project(land_v, crs_proj)
+
+# Rasterize land onto pop grid (single layer template)
+tmpl <- pop_proj[[1]]
+land_r <- rasterize(land_proj, tmpl, field = 1, background = NA)
+
+# Sea mask (1 at sea, NA on land)
+sea_r <- land_r
+sea_r[] <- 1
+sea_r[!is.na(land_r)] <- NA
+
+```
+
+```{r}
+## 3) Coastal land band (≤ 10 km inland from shoreline)
+# distance() to sea gives meters for every cell; mask to land ≤10 km
+dist_to_sea_m <- distance(sea_r)
+coastal_land_band <- mask(land_r, dist_to_sea_m <= 10000)
+
+plot(dist_to_sea_m <= 10000)
+plot(coastal_land_band)
+```
+
+```{r}
+## 4) Population criteria on coastal land (per year)
+# (a) density ≥ 1 person/km² OR (b) local population within 10 km ≥ 200
+# Prepare area and focal window
+area_km2 <- cellSize(tmpl, unit = "km")      # km² per cell (same for all layers at this res/CRS)
+area_km2 <- rast(rep(list(area_km2), nlyr(pop_proj)))  # recycle to match layers
+names(area_km2) <- names(pop_proj)
+
+# create a zero raster with the same geometry so we can use cover
+r0 <- pop_proj[[1]]
+r0[] <- 0
+
+# fill NAs in pop_proj with zeros from r0 
+pop_proj <- cover(pop_proj, r0)
+
+w <- matrix(1, nrow = 3, ncol = 3)
+local_sum <- terra::focal(pop_proj, w = w, fun = "sum", na.rm = TRUE)
+
+# Density (people per km²)
+dens <- pop_proj / area_km2
+
+# Inhabited if density≥1 OR local_sum≥200; then keep only in coastal land band
+inhabited <- (dens >= 1) | (local_sum >= 200) # more than 200 people within a pixel (20-60km2) or more than 1 person per km2
+inhabited_coast <- mask(inhabited, coastal_land_band)
+
+```
+
+
+```{r}
+## 5) Sea-side adjacency: distance from sea cells to populated coastal land ≤ 50 km
+
+# keep only truly inhabited coastal cells as sources (1 stays 1, 0 becomes NA)
+inhabited_coast01 <- terra::classify(inhabited_coast, rbind(c(0, NA), c(1, 1)))
+
+adjacent_list <- lapply(seq_len(nlyr(inhabited_coast01)), function(i) {
+  src <- inhabited_coast01[[i]]          # NA except where inhabited==1
+  d   <- terra::distance(src)            # meters to inhabited coastal land only
+  d_sea <- terra::mask(d, sea_r)         # keep distances over sea
+  adj <- d_sea <= 50000                  # within 50 km
+  names(adj) <- paste0("y", years[i])
+  adj
+})
+adjacent_stack_proj <- terra::rast(adjacent_list)
+adjacent_stack_ll   <- terra::project(adjacent_stack_proj, crs(pop), method = "near")
+```
+
+```{r}
+## 6) Extract to your ocean grid (lon/lat points)
+pts <- vect(data_grid[, c("lon","lat")], geom = c("lon","lat"), crs = "EPSG:4326")
+
+vals <- terra::extract(adjacent_stack_ll, pts)  # returns ID + one col per year-layer (logical)
+vals$pixel_id <- data_grid$pixel_id
+
+# Tidy to (pixel_id, year, adjacent_inhabited) long table
+adj_long <- vals |>
+  select(-ID) |>
+  pivot_longer(-pixel_id, names_to = "layer", values_to = "adjacent_inhabited") |>
+  mutate(year = as.integer(sub("^y", "", layer))) |>
+  select(pixel_id, year, adjacent_inhabited) |>
+  arrange(pixel_id, year) %>%
+  mutate(adjacent_inhabited = ifelse(is.na(adjacent_inhabited) & !is.na(pixel_id), 0, adjacent_inhabited))
+
+
+test <- adj_long %>% 
+  filter(year == 1990 ) %>%
+  left_join(data_grid) %>%
+  dplyr::select(lon, lat, adjacent_inhabited) %>%
+  rast(., type = "xyz") %>%
+  plot()
+
+
+qs::qsave(adj_long, here("data/model_features/ifa/ifa_simple.qs"))
+
+```
+
+Now we need to read in depth and distance to shore and contain to <=50km OR <=200m depth cells 
+ - Note: we are using OR because this is SAUP assumption and when I use AND it excludes some areas, like Wallis and Futuna. 
+
+```{r}
+ifa_simple <- qs::qread(here("data/model_features/ifa/ifa_simple.qs"))
+
+gfw_vars <- read.csv(here("data/model_features/gfw_static_spatial_measures.csv")) %>%
+  dplyr::select(pixel_id, lon, lat, distance_from_shore_m, elevation_m) # distance to shore is actually km, not m.
+
+# (elevation_m >= -200 | distance_from_shore_m <= 50)
+
+ifa_fin <- ifa_simple %>% 
+  left_join(gfw_vars) %>%
+  mutate(ifa = case_when(
+    (elevation_m >= -200 | distance_from_shore_m <= 50) & adjacent_inhabited == 1 ~ 1, 
+    TRUE ~ 0
+  )) %>%
+  dplyr::select(pixel_id, lon, lat, year, ifa)
+
+## now lets make sure that all of the EEZs are represented with an IFA. 
+eez_lookup <- read.csv(here("data/model_features/eez/eez_lookup_fix.csv")) %>%
+  clean_names() %>%
+  mutate(eez_country_name = countrycode(eez_sovereign, origin = "iso3c", destination = "country.name")) %>%
+  mutate(eez_country_name = case_when(
+    eez_sovereign == "RAA" ~ "Azores", 
+    eez_sovereign == "RAM" ~ "Madeira",
+    TRUE ~ eez_country_name
+  )) %>%
+  mutate(eez_country_name = ifelse(is.na(eez_country_name), "High seas", eez_country_name))
+
+eez <- read.csv(here("data/model_features/eez/eez_fix.csv"))
+
+test <- ifa_fin %>% 
+  filter(year == 1990 ) %>%
+  left_join(data_grid) %>%
+  left_join(eez) %>%
+  left_join(eez_lookup) %>%
+  filter(eez_sovereign == "WLF") %>%
+  dplyr::select(lon, lat, ifa) %>%
+  rast(., type = "xyz") %>%
+  plot()
+
+ifa_eez <- ifa_fin %>% 
+  left_join(data_grid) %>%
+  left_join(eez) %>%
+  left_join(eez_lookup) %>%
+  filter(ifa == 1)
+
+missing_eez <- unique(setdiff(unique(eez_lookup$eez_sovereign), unique(ifa_eez$eez_sovereign)))
+
+#  [1] "KIR" "SYC" "KNA" "MLT" "TGO" "MCO" "PSE" "IRQ" "JOR" "BIH" "MHL" "PLW" "BEL" "TUV" "FSM" "MDV" "NRU" "COK" "PYF" "NIU" "RAA" "GUM"
+# [23] "WLF" "BMU" "HKG"
+
+setdiff(unique(eez_lookup$eez_country_name), unique(ifa_eez$eez_country_name))
+
+## we are missing these from the IFA... ? Let's see if we can fix that. I assume it has something to do with the resolution of our population layer. These all have really small EEZs
+#  [1] "Kiribati"                         "Seychelles"                       "St. Kitts & Nevis"               
+#  [4] "Malta"                            "Togo"                             "Monaco"                          
+#  [7] "Palestinian Territories"          "Iraq"                             "Jordan"                          
+# [10] "Bosnia & Herzegovina"             "Marshall Islands"                 "Palau"                           
+# [13] "Belgium"                          "Tuvalu"                           "Micronesia (Federated States of)"
+# [16] "Maldives"                         "Nauru"                            "Cook Islands"                    
+# [19] "French Polynesia"                 "Niue"                             "Azores"                          
+# [22] "Guam"                             "Wallis & Futuna"                  "Bermuda"                         
+# [25] "Hong Kong SAR China"  
+
+
+ifa_fix_missing <- ifa_fin %>%
+    left_join(data_grid) %>%
+  left_join(eez) %>%
+  left_join(eez_lookup) %>%
+  filter(eez_sovereign %in% c(missing_eez))
+
+test <- ifa_fix_missing %>%
+  filter(year == 2017) %>%
+  dplyr::select(lon, lat, ifa) %>%
+  rast(., type = "xyz") %>%
+  plot() # ok, lets just exclude the population layer from these places and only filter for <200m or <50km 
+
+
+  ifa_fix_missing_fin <- ifa_fix_missing %>%
+      left_join(gfw_vars) %>%
+  mutate(ifa = case_when(
+    (elevation_m >= -200 | distance_from_shore_m <= 50) ~ 1, 
+    TRUE ~ 0
+  )) 
+  
+test <- ifa_fix_missing_fin %>%
+  filter(ifa == 1)
+
+setdiff(missing_eez, unique(test$eez_sovereign)) # still missing MCO, PSE, and BIH. Are these actually in the Rousseau data? 
+
+hist_fish_data <- qs::qread(here("data/model_features/rousseau_total_art_vessels.qs")) %>%
+  mutate(flag_country_name = countrycode(flag_fin, origin = "iso3c", destination = "country.name")) %>%
+  mutate(flag_country_name = 
+           case_when(
+             flag_fin == "RAA" ~ "Azores", 
+             flag_fin == "RAM"  ~ "Madeira",
+             TRUE ~ flag_country_name
+           ))
+
+  
+flags <- as.data.frame(unique(hist_fish_data$flag_fin)) # get the flags we need to run models for # 151 of them
+
+## ok cool, those missing are not actually in the Rousseau data, so we should be ok! 
+
+
+ifa_fix_missing_fin <- ifa_fix_missing %>%
+      left_join(gfw_vars) %>%
+  mutate(ifa = case_when(
+    (elevation_m >= -200 | distance_from_shore_m <= 50) ~ 1, 
+    TRUE ~ 0
+  )) %>%
+  dplyr::select(pixel_id, lon, lat, year, ifa)
+  
+## now add these back into the ifa 
+ifa_fin_fin <- ifa_fin %>%
+  rbind(., ifa_fix_missing_fin)
+
+
+
+
+qs::qsave(ifa_fin_fin, here("data/model_features/ifa/ifa_fin.qs"))
+
+
+test_df <- ifa_fin_fin %>% 
+  filter(year == 1990) %>%
+  left_join(data_grid) %>%
+  left_join(eez) %>%
+  left_join(eez_lookup) %>%
+  filter(eez_sovereign %in% missing_eez)
+
+setdiff(missing_eez, unique(test_df$eez_sovereign)) # cool, these aren't in the fishing data. 
+
+test_rast <- test_df %>%
+  dplyr::select(lon, lat, ifa) %>%
+  rast(., type = "xyz") %>%
+  plot()
+
+# cool! 
+
+```
+

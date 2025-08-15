@@ -1,0 +1,512 @@
+---
+title: "Regional models for gapfilling"
+output: html_document
+date: "2024-12-11"
+---
+
+# Summary
+
+Here we fit stage 2 larger regional models which will be used for gapfilling missing flag countries in the Skylight data. We fit regional models for these 12 regions: 
+
+ - sub continental reported in Rousseau data (SAUPtoCountry.csv)? E.g., [1] "SubAfrica"      "Europe"         "LatinAmerica"   "AustraliaNZ"    "IndianP"        "Caribbean"      "SouthEastAsia" 
+ [8] "NorthAmerica"   "NorthEastAsia"  "IslandsNations" "NWAfrica"       "MidEast"     
+ 
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list = ls())
+
+library(tidyverse)
+library("qs")
+library(foreach)
+library(doParallel)
+library(here)
+library(tictoc)
+library(progress)
+library(terra)
+library(glue)
+library(strex)
+library(broom)
+library(PRROC)
+library(janitor)
+library(ranger)
+
+source(here("R/dir.R"))
+
+```
+ 
+## Functions to prepare enviro and effort data  
+```{r}
+elnino <- read.csv(here("data/model_features/enso_index.csv"))
+
+pdo <- read.csv(here("data/model_features/pdo_index.csv")) 
+
+world_bank <- read.csv(here("data/model_features/world_bank_regions.csv")) 
+
+gfi_df <- read.csv(here("data/model_features/global_fishing_index_governance.csv"))
+
+# Load prepared data
+model_data <- readRDS(here("data/model_features/prepared_data_0.5.rds")) %>%
+  mutate(year = as.numeric(year)) 
+
+## read in environmental variables
+
+  global_grid <- read.csv(here("data/model_features/global_grid.csv"))
+ 
+   chl_data <- qs::qread(here("data/model_features/chl_data.qs"))
+  
+  sst_data <- read.csv(here("data/model_features/sst_data.csv"))
+
+  wind_data <- qs::qread(here("data/model_features/wind_data.qs"))
+
+  ocean_data <- sst_data %>%
+    left_join(chl_data) %>%
+    left_join(wind_data)
+
+  spatial_data <- global_grid %>%
+    left_join(read.csv(here("data/model_features/gfw_static_spatial_measures.csv")) %>% dplyr::select(-lat, -lon), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/mesopelagiczones/mesopelagiczones_fixed.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/eez/eez.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/fao/fao_fixed.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/ocean/ocean_fixed.csv")), by = "pixel_id") %>%
+    left_join(read.csv(here("data/model_features/seamounts.csv")), by = "pixel_id") %>% 
+   crossing(., year = c(2009:2024)) 
+  
+  
+  env_data <- spatial_data %>%
+    left_join(ocean_data) %>% # cool.
+    dplyr::select(-geometry_wkt) %>%
+    left_join(elnino) %>%
+    left_join(pdo) %>%
+    left_join(world_bank, by = c("eez_id")) %>%
+    mutate(eez_region_world_bank_7 = ifelse(eez_sovereign %in% c("High seas", "Land"), "High seas", eez_region_world_bank_7)) %>% 
+    left_join(gfi_df, by = c("eez_sovereign" = "flag_fin")) %>% # add in global fishing index data here
+    mutate(gov_score = ifelse(eez_id >= 99999 & is.na(gov_score), "high_seas", gov_score)) %>%
+        mutate(gov_score = ifelse(eez_id < 99999 & is.na(gov_score), "no_data", gov_score)) %>%
+    dplyr::select(-eez_sovereign, -nearest_seamount_id) %>% 
+    distinct() 
+
+``` 
+ 
+## Specify model formula and regions to run 
+
+```{r}
+
+# Prepare model formula
+# apply model on train 
+model_formula_rf <- formula(
+  prop_vessels ~ 
+    # Categorical/factor predictors
+    length_category +
+    meso_id +
+    eez_id +
+    fao_id +
+    ocean +  # Spatial categorical variables
+    gov_score + # global fishing index; make sure this is categorical and not a numeric variable
+    # Continuous predictors
+    lon + lat + 
+    elevation_m + # depth
+    distance_from_port_m + 
+    distance_from_shore_m +
+    chl_mg_per_m3_mean + 
+    chl_mg_per_m3_sd +
+    sst_c_mean + 
+    sst_c_sd +
+    wind_speed_ms_mean + 
+    wind_speed_ms_sd +
+    enso_index_mean + # el nino data 
+    enso_index_sd + # pacific decadal oscillation
+    pdo_index_mean +  
+    pdo_index_sd + 
+    nearest_seamount_distance_m + 
+    year 
+)
+  
+env_grid <- env_data %>% 
+  dplyr::select(lon, lat) %>% distinct()
+
+## Use the regions as described in Rousseau et al, and assigning any landlocked countries to their continent:
+
+rousseau_regions <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv") %>%
+  dplyr::select(-X) %>%
+  rename(region = Region) 
+
+fix_landlocked <- rousseau_regions %>%
+  filter(region == "Landlocked") %>%
+  mutate(region = case_when(
+    Country == "AFG" ~ "MidEast",
+    Country == "AND" ~ "Europe",
+    Country == "AZE" ~ "MidEast",
+    Country == "AUT" ~ "Europe",
+    Country == "ARM" ~ "MidEast",
+    Country == "BTN" ~ "SouthEastAsia",
+    Country == "BOL" ~ "LatinAmerica",
+    Country == "BWA" ~ "SubAfrica",
+    Country == "BDI" ~ "SubAfrica",
+    Country == "BLR" ~ "Europe",
+    Country == "CAF" ~ "SubAfrica",
+    Country == "TCD" ~ "NWAfrica",
+    Country == "CSK" ~ "Europe",   # Historical, treat as Europe if included
+    Country == "CZE" ~ "Europe",
+    Country == "ETH" ~ "SubAfrica",
+    Country == "HUN" ~ "Europe",
+    Country == "KAZ" ~ "MidEast",
+    Country == "KGZ" ~ "MidEast",
+    Country == "LAO" ~ "SouthEastAsia",
+    Country == "LSO" ~ "SubAfrica",
+    Country == "LIE" ~ "Europe",
+    Country == "LUX" ~ "Europe",
+    Country == "MWI" ~ "SubAfrica",
+    Country == "MLI" ~ "NWAfrica",
+    Country == "MNG" ~ "NorthEastAsia",
+    Country == "MDA" ~ "Europe",
+    Country == "NPL" ~ "SouthEastAsia",
+    Country == "NER" ~ "NWAfrica",
+    Country == "PRY" ~ "LatinAmerica",
+    Country == "RWA" ~ "SubAfrica",
+    Country == "SMR" ~ "Europe",
+    Country == "SVK" ~ "Europe",
+    Country == "SWZ" ~ "SubAfrica",
+    Country == "CHE" ~ "Europe",
+    Country == "TJK" ~ "MidEast",
+    Country == "TKM" ~ "MidEast",
+    Country == "UGA" ~ "SubAfrica",
+    Country == "MKD" ~ "Europe",
+    Country == "BFA" ~ "NWAfrica",
+    Country == "UZB" ~ "MidEast",
+    Country == "SRB" ~ "Europe",
+    Country == "ZMB" ~ "SubAfrica",
+    TRUE ~ region
+  ))
+
+rousseau_fix <- rousseau_regions %>%
+  filter(region != "Landlocked") %>%
+  rbind(fix_landlocked) %>%
+  dplyr::select(-SAUP) %>%
+  filter(region  != "Unknown") %>%
+    add_row(Country = "ATF", region = "IslandNations") %>%
+    add_row(Country = "VAT", region = "Europe") %>%
+    add_row(Country = "BES", region = "Caribbean") %>%
+    add_row(Country = "CCK", region = "IslandNations")
+
+## ok we could use the world bank regions
+hist_fish_data <- qs::qread(here("data/model_features/rousseau_total_art_vessels.qs")) %>%
+  dplyr::select(-region) %>%
+    filter(nv > 0) %>%
+  left_join(rousseau_fix, by = c("flag_fin" = "Country"))
+
+missing <- hist_fish_data %>%
+  filter(is.na(region)) %>%
+  distinct(flag_fin, region) # 0 good
+
+```
+
+Fix the model data to be grouped to the region instead of flag country
+
+```{r}
+model_data_loop <- model_data %>%
+  left_join(rousseau_fix, by = c("flag_fin" = "Country")) %>%
+  # mutate(region = ifelse(is.na(region), "High seas", region)) %>% # don't worry about high seas for artisanal
+ group_by(lon, lat, length_category, region, year) %>%
+  summarise(nv = sum(nv, na.rm = TRUE)) %>%
+  ungroup() %>%
+  filter(!is.na(region)) %>%
+  group_by(length_category, region, year) %>%
+  mutate(total_nv = sum(nv, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(prop_vessels = nv/total_nv)
+
+# test <- model_data_loop %>% 
+#   filter(region == "Europe", year == 2012) %>%
+#   dplyr::group_by(lon, lat) %>%
+#   summarise(nv = sum(nv)) %>%
+#   ungroup() %>%
+#   rast(., type = "xyz")
+# plot(test)
+```
+
+## Run models and variable selection for every region
+
+ - calculate the "full" model using all variables available per region (24 variables)
+ - calculate variable importance metrics and root mean squared error (RMSE)
+ - Set a threshold of the 10th quantile of the variable importance (RMSE for regression) and remove any variables with variable importance less than that
+ - Rerun model with new variables and calculate model importance metrics and RMSE again
+ - If the RMSE doesn't DECREASE at all, we stop the model pruning, if it does, we continue, hoping that the RMSE will improve even more in the next iteration. 
+ - If the threshold doesn't remove any variables, we increase the threshold by 1% until a variable is removed, and rerun the process
+ - We loop through this until the RMSE does not improve at all (improvement being a decrease in RMSE)
+ 
+ NOTE: Lower RMSE is better
+
+Save full models first 
+ - These models are very quick to run
+
+```{r}
+regions_to_run <- unique(model_data_loop$region) # get the regions we want to run
+
+# Set up parallel backend
+num_cores <- 8 # Use one less than the total available cores
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+# Run the loop in parallel
+foreach(region_loop = regions_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "ranger")) %dopar% {
+ 
+  # region_loop = "IndianP"
+  
+  model_data_region <- model_data_loop %>%
+  dplyr::select(lon, lat, region, length_category, year, prop_vessels) %>%
+  filter(region == region_loop) %>% 
+  left_join(env_data) %>%
+  na.omit() 
+
+if(nrow(model_data_region) == 1){
+  next()
+}
+  
+set.seed(123)
+samp <- sample(nrow(model_data_region), 0.6 * nrow(model_data_region))  # do 60/40 split since this data is mostly small
+train <- model_data_region[samp, ]
+test <- model_data_region[-samp, ]
+
+tic()
+model <- ranger(
+  formula = model_formula_rf,
+  data = train,
+  num.trees = 500,
+  importance = "impurity",  # Or "permutation" for permutation-based importance
+  write.forest = TRUE,
+  classification = FALSE
+)
+toc() 
+
+# Initialize tracking
+var_imp_i <- data.frame(ranger::importance(model))
+n_vars <- nrow(var_imp_i)
+
+  qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/artisanal_minderoo/stage_2_models_regional/pruning/stage_2_rf_train_{region_loop}_{n_vars}.qs")))
+   
+}
+stopCluster(cl)
+
+```
+
+Now apply variable selection methods 
+
+```{r}
+num_cores <- 8 # Use one less than the total available cores
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+# Run the loop in parallel
+foreach(region_loop = regions_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "ranger", "PRROC")) %dopar% {
+
+    # region_loop = "IndianP"
+rmse_values <- c()
+
+  model_data_region <- model_data_loop %>%
+    dplyr::select(lon, lat, region, length_category, year, prop_vessels) %>%
+    filter(region == region_loop) %>%
+    left_join(env_data) %>%
+    na.omit()
+
+if(nrow(model_data_region) == 1){
+  next()
+}
+  
+  
+set.seed(123)
+samp <- sample(nrow(model_data_region), 0.6 * nrow(model_data_region))  # do 60/40 split since this data is mostly small
+
+train <- model_data_region[samp, ]
+
+test <- model_data_region[-samp, ]
+  
+if(!file.exists(glue(file.path(rdsi_dir, "prep/random_forest/artisanal_minderoo/stage_2_models_regional/pruning/stage_2_rf_train_{region_loop}_23.qs")))){
+tic()
+  
+model <- ranger(
+  formula = model_formula_rf,
+  data = train,
+  num.trees = 500,
+  importance = "impurity",  # Or "permutation" for permutation-based importance
+  write.forest = TRUE,
+  classification = FALSE
+)
+toc() 
+
+}else{
+  
+  model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/artisanal_minderoo/stage_2_models_regional/pruning/stage_2_rf_train_{region_loop}_23.qs")))
+  
+}
+
+# Initialize tracking
+var_imp_i <- data.frame(ranger::importance(model)) %>%
+  rename("importance" = 1)
+num_vars <- c(nrow(var_imp_i))
+threshold_i <- quantile(var_imp_i[, "importance"], 0.10)  # Use the 10th percentile instead of a fixed multiplier
+n_vars <- nrow(var_imp_i)
+
+  if (threshold_i == 0) {
+    threshold_i <- 0.0000001
+  }
+
+pred_props <- predict(model, data = test)$predictions
+rmse <- sqrt(mean((test$prop_vessels - pred_props)^2)) # use RMSE for probabilities instead?
+
+rmse_values <- c(rmse_values, rmse)
+
+# Iteratively remove low-importance variables
+iteration <- 1
+  max_iterations <- 50  # Safety cap to prevent infinite loops
+while (TRUE) {
+  
+  # Select variables above threshold
+      selected_vars <- var_imp_i %>%
+      filter(importance > threshold_i) %>%
+      row.names()
+    
+    selected_vars <- unique(c("year", selected_vars)) # always retain year and the ais reception data (for ais data biases)
+  
+  # Stop if too few variables remain
+  if (length(selected_vars) < 6) break  # Avoid over-pruning. We can change this to any number of variables. Maybe 10 would be better computationally? 
+  
+          # Increase the threshold iteratively until at least one variable is removed
+    while (length(selected_vars) == num_vars[length(num_vars)]) {
+        threshold_i <- threshold_i * 1.01  # Increase threshold by 1%
+    selected_vars <- var_imp_i %>%
+      filter(importance > threshold_i) %>%
+      row.names()
+    
+    selected_vars <- unique(c("year", selected_vars)) # always retain year and the ais reception data (for ais data biases)
+    }
+
+  # Refit model with selected variables
+
+      n_vars <- length(selected_vars)
+  file_path <-   glue(file.path(rdsi_dir, "prep/random_forest/artisanal_minderoo/stage_2_models_regional/pruning/stage_2_rf_train_{region_loop}_{n_vars}.qs"))
+  
+  if(!file.exists(file_path)){
+model_i <- ranger(
+  formula = prop_vessels ~.,
+  data = train[, c("prop_vessels", selected_vars)],
+  num.trees = 500,
+  importance = "impurity",
+  write.forest = TRUE,
+  classification = FALSE)
+  }else{
+      model_i <- qs::qread(file_path)
+
+}
+  
+  
+  # Get new variable importance
+  var_imp_i <- data.frame(ranger::importance(model_i)) %>%
+    rename("importance" = 1)
+
+  threshold_i <- quantile(var_imp_i[, 1], 0.1) # calculate new threshold since variable importance metric will change
+  
+  # Compute new RMSE
+    pred_props_i <- predict(model, data = test)$predictions
+  rmse_i <- sqrt(mean(test$prop_vessels - pred_props_i)^2)
+  
+  # Store metrics
+  rmse_values <- c(rmse_values, rmse_i)
+  num_vars <- c(num_vars, length(selected_vars))
+  
+
+  if(!file.exists(file_path)){
+    # save model here? Put number of variables (length(selected_vars)) in model save name so we know which one to pick for best predictions? 
+  qs::qsave(model_i, file_path)
+  }
+
+  # Check RMSE stability: Stop if no improvement
+  if (length(rmse_values) > 1) {
+    
+    rmse_improvement <- (rmse_values[length(rmse_values) - 1] - rmse_values[length(rmse_values)]) / rmse_values[length(rmse_values) - 1]
+    
+    if (rmse_improvement <= 0) break  # Stop if RMSE stabilizes
+    
+  }
+
+
+  iteration <- iteration + 1
+  
+      if (iteration > max_iterations) {
+      cat(region_loop, " - Reached max iterations. Stopping.\n")
+      break
+      }
+}
+
+}
+
+stopCluster(cl)
+
+```
+
+Now write code to select the "best" model per the variable selection from above. We will rerun the model with just those variables on the FULL dataset to leverage all of the data from GFW and save
+
+```{r}
+# grab the flags that were run in the folder
+stage_2_path <- file.path(rdsi_dir, "prep/random_forest/artisanal_minderoo/stage_2_models_regional/pruning")
+stage_2_files <- list.files(stage_2_path, full.names = TRUE)
+stage_2_regions <- unique(sub(".*stage_2_rf_train_([^_]+).*", "\\1", stage_2_files))
+
+
+num_cores <- 8 # Use one less than the total available cores
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+# Run the loop in parallel
+foreach(region_loop = stage_2_regions, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "ranger", "PRROC", "strex")) %dopar% {
+
+#  region_loop = "IndianP"
+  region_files <- list.files(stage_2_path, pattern = glue("_{region_loop}_"))
+  # select the model with the next to lowest number of variables. E.g., if the final model run for ZAF is 17, then we want to grab the model with the next to lowest number of variables, which is 19. 
+  n_variables <- as.numeric(str_before_first(str_after_last(region_files, "_"), "\\."))
+  
+  if(length(n_variables) > 1){
+  best_model_n <- as.character(sort(n_variables[2]))
+  }else{
+    best_model_n <- as.character(n_variables[1])
+  }
+  
+  best_train_model <- qs::qread(file.path(stage_2_path, glue("stage_2_rf_train_{region_loop}_{best_model_n}.qs")))
+  
+  expanded_formula <- as.formula(
+  paste("prop_vessels ~", paste(best_train_model$forest$independent.variable.names, collapse = " + "))
+)
+
+  rf_formula <- as.formula(deparse(formula(expanded_formula)) |> paste(collapse = " "))
+  
+model_data_flag <- model_data_loop %>%
+  dplyr::select(lon, lat, region, length_category, year, prop_vessels) %>%
+  filter(region == region_loop) %>% 
+  left_join(env_data) %>%
+  na.omit() # this removes the categories which are not in the Rousseau data. For example, Rousseau does not have data for NZL, Lines_Longlines, 24-50m, 2015, but GFW does. 
+
+if(nrow(model_data_flag) == 1){
+  next()
+} # skip if not enough data, I don't think this is a worry here but just in case.
+
+
+tic()
+model <- ranger(
+  formula = rf_formula,
+  data = model_data_flag,
+  num.trees = 500,
+  importance = "impurity",  # Or "permutation" for permutation-based importance
+  write.forest = TRUE,
+  classification = FALSE
+)
+toc() 
+
+
+qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/artisanal_minderoo/stage_2_models_regional/stage_2_rf_model_full_data_{region_loop}_{best_model_n}.qs")))
+}
+
+stopCluster(cl)
+
+
+```
+

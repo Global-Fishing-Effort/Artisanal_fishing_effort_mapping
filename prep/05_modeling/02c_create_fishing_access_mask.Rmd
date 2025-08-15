@@ -1,0 +1,87 @@
+---
+title: "Create fishing access dataset"
+output: html_document
+date: "2024-12-11"
+---
+
+# Summary
+
+Here we create a dataset that described for each flag country, the EEZs they are able to fish in for each year. For artisanal data, we assume that countries can only fish in their EEZ
+
+The data will be formatted as year \| flag country \| eez (including high seas?) \| fishing (1 or 0)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(here)
+library(countrycode)
+library(sf)
+library(qs)
+
+source(here("R/dir.R"))
+```
+
+Try with catch data instead?
+
+```{r}
+hist_fish_data <- qs::qread(here("data/model_features/rousseau_total_art_vessels.qs"))
+
+model_data <- readRDS(here("data/model_features/prepared_data_0.5.rds"))
+test_iso <- unique(model_data$flag_fin)
+
+## need to make a dataset where each flag country has access to its own EEZ for each year: 
+iso3_list <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 164 of them
+
+setdiff(test_iso, iso3_list) # uh oh... missing some. We'll add them just to be safe
+
+iso3_list <- unique(c("AZE", "KAZ", "TKM", "NZL", iso3_list))
+
+# Define the years
+years <- 1950:2024
+
+# Create a dataframe with all combinations of year and country
+fishing_access_own_eez <- expand.grid(
+  year = years,
+  flag_fin = iso3_list,
+  stringsAsFactors = FALSE
+)
+
+# Add EEZ sovereign column (equal to flag_fin in this case)
+fishing_access_own_eez$eez_sovereign <- fishing_access_own_eez$flag_fin
+
+# Set access = 1
+fishing_access_own_eez$access <- 1
+
+eez_lookup <- read.csv(here("data/model_features/eez/eez_lookup_fix.csv"))
+eez_df <- read.csv(here("data/model_features/eez/eez_fix.csv")) %>%
+  left_join(., eez_lookup)
+
+test <- eez_df %>%
+  filter(eez_sovereign %in% c("VIR", "ASM", "ESH", "FLK", "HKG", "MAC")) # ok none of these are in the eez data, so we'll assign their access to their sovereign states
+
+fishing_access_own_eez <- fishing_access_own_eez %>%
+    mutate(eez_sovereign = case_when(
+    eez_sovereign %in% c("VIR", "ASM") ~ "USA",
+    eez_sovereign == "ESH" ~ "MAR", # this is technically not right? I guess it depends on the year 
+    eez_sovereign == "FLK" ~ "ARG",
+    eez_sovereign %in% c("MAC") ~ "CHN", # contentious? 
+    TRUE ~ eez_sovereign
+  ))  %>%
+    left_join(eez_lookup)
+
+test <- fishing_access_own_eez %>%
+  filter(is.na(eez_id)) %>%
+  distinct(flag_fin, eez_sovereign, eez_id)
+
+test <- fishing_access_own_eez %>%
+  filter(eez_sovereign == "HKG")
+
+qs::qsave(fishing_access_own_eez, here("data/int/prediction_historical_data/art_fishing_access.qs"))
+
+
+```
+
+
+
+

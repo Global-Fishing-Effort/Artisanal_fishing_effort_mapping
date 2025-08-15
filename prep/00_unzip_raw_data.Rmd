@@ -1,0 +1,90 @@
+---
+title: "Unzip raw minderoo data"
+output: html_document
+date: "2025-05-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(here)
+library(tidyverse)
+library(terra)
+library(dplyr)
+
+source(here("R/dir.R"))
+```
+
+```{r}
+unzip(file.path(rdsi_raw_dir, "minderoo_skylight/2024-08-14-initial-1494-images.zip"), exdir = file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1"))
+
+test <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/vessel.csv")) # no "is_in_water" column as jessica stated in email? I think we will need this as we will only want to indicate fishing effort if it is actually in the water, and not moored. 
+
+# the wgs_84 coordinates are the corners of each vessel. I'm guessing for our purposes we could take the centroid of the corners and make them a point and rasterize? 
+test2 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/image.csv")) # ok i dont think we really need these.
+# crops folder I think is each image cropped to where a vessel was detected. So each image is one vessel. The number at the end (e.g., "_32.jpg") represents the vessel index I believe. 
+# vis folder is each image with vessels in it with a color to where it is? 
+
+## jessica says "you can get the resolution from the geotiff file". The geotiff file I assume are the images in the "crops" folder? 
+# so for vessel index "3" we could figure out the resolution by reading in the files with "_3.jpg" in them and calculating the resolution of these? 100.1199411_2.657718.tif_3.jpg
+# can we read in a jpg file as a raster? 
+
+# what is the time frame of the images? 
+# could we attribute effort to vessel lengths based on Yannick data? 
+
+
+unzip(file.path(rdsi_raw_dir, "minderoo_skylight/2024-10-07-group2-3167-images.zip"), exdir = file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_2")) # this file does not have vessel.csv or image.csv
+
+unzip(file.path(rdsi_raw_dir, "minderoo_skylight/2024-10-28-group3-44339-images.zip"), exdir = file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_3"))
+
+```
+
+
+Lets explore the data:
+
+```{r}
+vessels_batch1 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/vessel.csv"))
+# vessels_batch2 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_2/vessel.csv")) # doesn't exist? 
+vessels_batch3 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_3/vessel.csv"))
+
+images_batch1 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/image.csv")) # 2009-2021?!
+images_batch2 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_2/image.csv")) # doesn't exist? 
+images_batch3 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_3/image.csv")) # 2009-2021!?
+setdiff(colnames(images_batch3), colnames(images_batch1)) # [1] "land_sq_km"  "water_sq_km" missing from batch 1 image.csv
+
+all_images <- images_batch3 %>%
+  dplyr::select(-land_sq_km, -water_sq_km) %>%
+  rbind(., images_batch1) %>%
+  mutate(year = year(timestamp),
+         month = month(timestamp),
+         day = day(timestamp))
+
+test_years <- all_images %>%
+  group_by(year) %>%
+  summarise(total_images = n_distinct(fname),
+            distinct_days = n_distinct(month, day)) %>%
+  ungroup() # ok so these are pulls from nearly every day from 2009-2021
+
+## how many images per day? 
+test_days <- all_images %>%
+  group_by(timestamp) %>%
+  summarise(total_images = n_distinct(fname)) %>%
+  ungroup()
+# ranges from 1 to 57 images per timestamp (day)
+```
+
+Need to remove all ".jpg" extensions and replace with .tif in unzipped_1(2 or 3)/crops
+
+find . -maxdepth 1 -type f -name "*.tif_*.jpg" -print0 | while IFS= read -r -d '' f; do
+  newname=$(echo "$f" | sed -E 's/\.tif_([0-9]+)\.jpg$/_\1.tif/')
+  echo "Renaming $f -> $newname"
+  mv "$f" "$newname"
+done
+
+```{r}
+test <- data.frame(fn = list.files(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_2/crops"))) %>%
+  filter(str_detect(fn, "jpg")) # should be none...
+
+```
+
+

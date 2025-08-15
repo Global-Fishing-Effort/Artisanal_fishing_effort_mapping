@@ -1,0 +1,416 @@
+---
+title: "Predict props to cells per flag, year, gear, length using the regional models"
+output: html_document
+date: "2025-07-29"
+---
+
+# Summary
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(terra)
+library(foreach)
+library(doParallel)
+library(progress)
+library(glue)
+library(qs)
+library(here)
+library(janitor)
+library(arrow)
+library(countrycode)
+library(sf)
+library(strex)
+library(ranger)
+
+source(here("R/dir.R"))
+```
+
+## Functions to prepare enviro and effort data  
+
+```{r}
+elnino <- read.csv(here("data/model_features/enso_index.csv"))
+
+pdo <- read.csv(here("data/model_features/pdo_index.csv")) 
+
+world_bank <- read.csv(here("data/model_features/world_bank_regions.csv")) 
+
+gfi_df <- read.csv(here("data/model_features/global_fishing_index_governance.csv"))
+
+# Load prepared data
+model_data <- readRDS(here("data/model_features/prepared_data_0.5.rds")) %>%
+  mutate(year = as.numeric(year)) %>%
+  mutate(presence = 1) 
+
+## read in environmental variables
+
+  global_grid <- read.csv(here("data/model_features/global_grid.csv"))
+  
+  chl_data <- qs::qread(here("data/model_features/chl_data.qs"))
+  
+  sst_data <- read.csv(here("data/model_features/sst_data.csv"))
+
+  wind_data <- qs::qread(here("data/model_features/wind_data.qs"))
+
+  ocean_data <- sst_data %>%
+    left_join(chl_data) %>%
+    left_join(wind_data) %>%
+    filter(year %in% c(2015:2017))
+  
+ocean_data_historical <- qs::qread(here("data/int/prediction_historical_data/chl_yearly_1950_2014.qs")) %>%
+  left_join(qs::qread(here("data/int/prediction_historical_data/sst_yearly_1950_2014.qs")), by = c("pixel_id", "year")) %>% 
+  left_join(qs::qread(here("data/int/prediction_historical_data/wind_yearly_1950_2014.qs")) %>% mutate(year = as.numeric(year)), by = c("pixel_id", "year"))
+
+  ocean_data_all <- ocean_data %>%
+    rbind(ocean_data_historical)
+
+  spatial_data <- global_grid %>%
+    left_join(read.csv(here("data/model_features/gfw_static_spatial_measures.csv")) %>% dplyr::select(-lat, -lon), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/mesopelagiczones/mesopelagiczones_fixed.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/eez/eez.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/fao/fao_fixed.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/ocean/ocean_fixed.csv")), by = "pixel_id") %>%
+    left_join(read.csv(here("data/model_features/seamounts.csv")), by = "pixel_id") %>% 
+   crossing(., year = c(1950:2017)) 
+  
+  
+  env_data <- spatial_data %>%
+    left_join(ocean_data_all) %>% # cool.
+    left_join(elnino) %>%
+    left_join(pdo) %>%
+    left_join(world_bank, by = c("eez_id")) %>%
+    mutate(eez_region_world_bank_7 = ifelse(eez_sovereign %in% c("High seas", "Land"), "High seas", eez_region_world_bank_7)) %>% 
+    left_join(gfi_df, by = c("eez_sovereign" = "flag_fin")) %>% # add in global fishing index data here
+    mutate(gov_score = ifelse(eez_id >= 99999 & is.na(gov_score), "high_seas", gov_score)) %>%
+        mutate(gov_score = ifelse(eez_id < 99999 & is.na(gov_score), "no_data", gov_score)) %>%
+    dplyr::select(-eez_sovereign, -nearest_seamount_id, -geometry_wkt) %>% 
+    distinct()
+  
+
+mollweide_projection <- "+proj=moll +lon_0=0 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+
+data_grid_area <- global_grid %>%
+    st_as_sf(wkt = "geometry_wkt",
+           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")%>% 
+  st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>% 
+  st_transform(mollweide_projection) %>%
+  mutate(pixel_area_m2 = st_area(geometry_wkt)%>%
+           units::drop_units()) 
+
+```
+
+```{r}
+
+rousseau_regions <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv") %>%
+  dplyr::select(-X) %>%
+  rename(region = Region) 
+
+fix_landlocked <- rousseau_regions %>%
+  filter(region == "Landlocked") %>%
+  mutate(region = case_when(
+    Country == "AFG" ~ "MidEast",
+    Country == "AND" ~ "Europe",
+    Country == "AZE" ~ "MidEast",
+    Country == "AUT" ~ "Europe",
+    Country == "ARM" ~ "MidEast",
+    Country == "BTN" ~ "SouthEastAsia",
+    Country == "BOL" ~ "LatinAmerica",
+    Country == "BWA" ~ "SubAfrica",
+    Country == "BDI" ~ "SubAfrica",
+    Country == "BLR" ~ "Europe",
+    Country == "CAF" ~ "SubAfrica",
+    Country == "TCD" ~ "NWAfrica",
+    Country == "CSK" ~ "Europe",   # Historical, treat as Europe if included
+    Country == "CZE" ~ "Europe",
+    Country == "ETH" ~ "SubAfrica",
+    Country == "HUN" ~ "Europe",
+    Country == "KAZ" ~ "MidEast",
+    Country == "KGZ" ~ "MidEast",
+    Country == "LAO" ~ "SouthEastAsia",
+    Country == "LSO" ~ "SubAfrica",
+    Country == "LIE" ~ "Europe",
+    Country == "LUX" ~ "Europe",
+    Country == "MWI" ~ "SubAfrica",
+    Country == "MLI" ~ "NWAfrica",
+    Country == "MNG" ~ "NorthEastAsia",
+    Country == "MDA" ~ "Europe",
+    Country == "NPL" ~ "SouthEastAsia",
+    Country == "NER" ~ "NWAfrica",
+    Country == "PRY" ~ "LatinAmerica",
+    Country == "RWA" ~ "SubAfrica",
+    Country == "SMR" ~ "Europe",
+    Country == "SVK" ~ "Europe",
+    Country == "SWZ" ~ "SubAfrica",
+    Country == "CHE" ~ "Europe",
+    Country == "TJK" ~ "MidEast",
+    Country == "TKM" ~ "MidEast",
+    Country == "UGA" ~ "SubAfrica",
+    Country == "MKD" ~ "Europe",
+    Country == "BFA" ~ "NWAfrica",
+    Country == "UZB" ~ "MidEast",
+    Country == "SRB" ~ "Europe",
+    Country == "ZMB" ~ "SubAfrica",
+    TRUE ~ region
+  ))
+
+rousseau_fix <- rousseau_regions %>%
+  filter(region != "Landlocked") %>%
+  rbind(fix_landlocked) %>%
+  dplyr::select(-SAUP) %>%
+  filter(region  != "Unknown") %>%
+    add_row(Country = "ATF", region = "IslandNations") %>%
+    add_row(Country = "VAT", region = "Europe") %>%
+    add_row(Country = "BES", region = "Caribbean") %>%
+    add_row(Country = "CCK", region = "IslandNations")
+
+hist_fish_data <- qs::qread(here("data/model_features/rousseau_total_art_vessels.qs")) %>%
+  dplyr::select(-region) %>%
+    filter(nv > 0) %>%
+  mutate(flag_country_name = countrycode(flag_fin, origin = "iso3c", destination = "country.name")) %>%
+  mutate(flag_country_name = 
+           case_when(
+             flag_fin == "RAA" ~ "Azores", 
+             flag_fin == "RAM"  ~ "Madeira",
+             TRUE ~ flag_country_name
+           )) %>%
+  left_join(rousseau_fix, by = c("flag_fin" = "Country"))
+
+  
+flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 147 of them
+
+env_grid <- env_data %>% 
+  dplyr::select(lon, lat) %>% distinct()
+
+```
+
+
+Read in EEZ id and FAO id lookup tables so we can save with the actual iso3c and FAO id numbers
+
+```{r}
+
+eez_lookup <- read.csv(here("data/model_features/eez/eez_lookup.csv")) %>%
+  clean_names() %>%
+  mutate(eez_country_name = countrycode(eez_sovereign, origin = "iso3c", destination = "country.name")) %>%
+  mutate(eez_country_name = ifelse(is.na(eez_country_name), "High seas", eez_country_name)) %>%
+  mutate()
+
+fao_lookup <- read.csv(here("data/model_features/fao/fao_major_ids.csv")) %>%
+  clean_names() %>%
+  dplyr::select(fao_id, "fao_major_fishing_area" = "name_en")
+
+global_grid <- read.csv(here("data/model_features/global_grid.csv")) %>%
+  dplyr::select(lon, lat, pixel_id)
+
+```
+Load access data 
+
+```{r}
+
+access_data_loop <- qs::qread(here("data/int/prediction_historical_data/art_fishing_access.qs")) %>%
+  distinct()
+
+env_grid <- env_data %>% 
+  dplyr::select(lon, lat) %>% distinct()
+```
+
+
+After the models are fit, we make predictions on ALL DATA. So stage 1 is in sample predictions (since we fit the stage one model on all data), and stage two will contain out of sample predictions (since we fit the model on only data with fishing effort in it!)
+
+ - This gapfilling fills ~10% of global production 
+ 
+```{r}
+years <- c(1950:2017)
+
+# what region models do we have? 
+model_data_loop <- model_data %>%
+  left_join(rousseau_fix, by = c("flag_fin" = "Country")) %>%
+  filter(!is.na(region))
+
+flags_model <- unique(model_data_loop$flag_fin)
+
+regions <- c(unique(model_data_loop$region))
+
+flags <- hist_fish_data %>%
+  filter(region %in% regions) %>%
+  pull(flag_fin) %>%
+  unique() # 121 can be filled in through this 
+ 
+
+cl <- makeCluster(30)  
+registerDoParallel(cl)
+foreach(flag = flags, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
+# foreach(yr = years, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
+ for(yr in years) {
+# flag = "AGO"
+# yr = 2017
+    
+    # if(file.exists(file.path(glue("/home/ubuntu/data_storage/prep/random_forest/minderoo_artisanal/predictions_regional/yearly/model_preds_{flag}_{yr}.qs")))){
+    #   cat("skipping... exists")
+    #   next()
+    # }
+    
+# get combination of categories we need to run through our models
+model_data_flag <- hist_fish_data %>%
+  dplyr::select(flag_fin, length_category, year, nv, region) %>%
+  filter(flag_fin == flag, year == yr)
+  
+distinct_cats <- model_data_flag %>%
+    distinct(flag_fin, length_category) 
+
+full_grid <- tidyr::crossing(env_grid, distinct_cats) %>%
+  crossing(., year = yr)
+  
+full_data <- full_grid %>%
+  left_join(env_data, by = c("lon", "lat", "year")) %>%
+  dplyr::select(-pixel_id) 
+
+if(nrow(full_data) == 0){
+    cat("skipping", flag, yr, "check to make sure this is right")
+  next()
+}
+
+region_loop <- model_data_flag %>%
+  pull(region) %>%
+  unique()
+
+# read in stage 2 model! 
+# Get the list of matching files
+matching_files <- list.files(
+  path = file.path(rdsi_dir, "prep/random_forest/artisanal_minderoo/stage_2_models_regional"), 
+  pattern = glue::glue("stage_2_rf_model_full_data_{region_loop}_.*\\.qs$"),
+  full.names = TRUE
+)
+
+# Check if a matching file exists
+if (length(matching_files) > 0) {
+  stage2_model <- qs::qread(matching_files[1])  # Read the first matching file
+} else {
+  stop("No matching file found for flag: ", flag)
+}
+
+set.seed(123)
+oos_preds <- full_data %>%
+  mutate(pred_prop = predict(stage2_model, data = .)$predictions)
+
+## read in stage 1 model! 
+# Get the list of matching files
+matching_files <- list.files(
+  path = file.path(rdsi_dir, "prep/random_forest/artisanal_minderoo/stage_1_models_regional/"), 
+  pattern = glue::glue("stage_1_rf_model_full_data_{region_loop}_.*\\.qs$"),
+  full.names = TRUE
+)
+
+# Check if a matching file exists
+if (length(matching_files) > 0) {
+  stage1_model <- qs::qread(matching_files[1])  # Read the first matching file
+} else {
+  stop("No matching file found for flag: ", flag)
+}
+
+set.seed(123)
+## make stage 1 predictions and apply fishing access filter 
+stage1_preds <- full_data %>%
+  mutate(pred_presence = predict(stage1_model, data = .)$predictions[, "1"]) %>%
+  mutate(pred_presence = ifelse(is.na(pred_presence), 0, pred_presence)) %>%
+  left_join(eez_lookup) %>%
+  left_join(access_data_loop %>% dplyr::select(-eez_sovereign)) %>%
+  mutate(access = ifelse(is.na(access), 0, access)) %>% 
+  mutate(access = ifelse(eez_sovereign == flag, 1, access)) %>% # only allow fishing in their EEZ
+  mutate(pred_presence_access = access*pred_presence)
+
+# now rescale predictions so that if the preds are > 0 and in their EEZ, then make them 1. 
+stage_1_preds_rescale <- stage1_preds %>%
+  left_join(eez_lookup) %>%
+  mutate(pred_presence_rescale = ifelse(pred_presence_access > 0 & flag_fin == eez_sovereign, 1, 0)) 
+
+
+## join stage 1 and 2 preds together and multiply 
+all_preds <- oos_preds %>%
+   left_join(., stage_1_preds_rescale) %>% 
+   dplyr::select(lon, lat, flag_fin, length_category, year, fao_id, eez_id, eez_sovereign, pred_prop, pred_presence_rescale) %>% 
+  mutate(pred_prop_final = pred_prop*pred_presence_rescale) %>%
+  filter(pred_prop_final > 0) %>%
+  filter(!is.na(pred_prop_final)) %>%
+ group_by(year, flag_fin, length_category) %>%
+  mutate(prop_nv_cell_predict_rescaled = pred_prop_final / sum(pred_prop_final, na.rm = TRUE)) %>%
+ ungroup() %>% # need to rescale the predictions to be between 0 and 1 here so that we can allocate effort
+  left_join(hist_fish_data) %>%
+  mutate(nv = prop_nv_cell_predict_rescaled*nv) %>%
+    mutate(nom_active_fishing_days = nv*days_at_sea_mean*gt_kw_mean) %>% # this is days right? yes
+  mutate(eff_active_fishing_days = nom_active_fishing_days * (1.0261 ^ (year - 1950))) %>% # now calculate effective effort, using the formula from Rousseau et al. 2019
+  left_join(global_grid) %>%
+  left_join(fao_lookup) %>%
+  left_join(eez_lookup) %>%
+    dplyr::select(pixel_id, lon, lat, year, flag_fin, length_category, eez_sovereign, fao_id, fao_major_fishing_area, nv) %>%
+  filter(nv > 0) %>%
+  mutate(sector = "Artisanal")
+
+if(nrow(all_preds) == 0){
+    cat("skipping", flag, yr, "no predictions made...")
+  next()
+}
+
+# test_preds <- all_preds %>%
+#   # filter(eez_sovereign == "USA") %>%
+#   dplyr::group_by(lon, lat) %>%
+#   summarise(nv = sum(nv, na.rm = TRUE)) %>%
+#   ungroup() %>%
+#   rast(., type = "xyz")
+# 
+# plot(test_preds)
+# plot(log(test_preds+1)) # Cool!
+
+
+qs::qsave(all_preds, file.path(rdsi_dir, glue("prep/random_forest/artisanal_minderoo/predictions_regional/yearly/model_preds_{flag}_{yr}.qs"))) # qs is smaller
+
+  }
+}
+
+stopCluster(cl)
+
+
+```
+
+Combine all years for flag and save 
+
+```{r}
+data_grid_area <- data_grid_area %>%
+st_drop_geometry()
+
+cl <- makeCluster(30) 
+registerDoParallel(cl)
+
+foreach(flag = flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
+  # flag = "UKR"
+  
+  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/artisanal_minderoo/predictions_regional/yearly/"), pattern = flag, full.names = TRUE)
+  
+    # Skip iteration if no files are found
+  if (length(all_files_flag) == 0) next
+  
+  all_data_flag <- lapply(all_files_flag, qread) %>%
+    bind_rows() %>%
+    left_join(eez_lookup) %>%
+    mutate(flag_country_name = countrycode(flag_fin, origin = "iso3c", destination = "country.name")) %>%
+        mutate(eez_country_name = countrycode(eez_sovereign, origin = "iso3c", destination = "country.name")) %>%
+    mutate(eez_country_name = ifelse(eez_sovereign == "High seas", "High seas", eez_country_name)) %>%
+    dplyr::select(pixel_id, lon, lat, year, flag_fin, flag_country_name, length_category, eez_sovereign, eez_country_name, fao_id, fao_major_fishing_area, nv, sector) %>%
+        rename(flag_country_iso3c = flag_fin, eez_sovereign_iso3c = eez_sovereign, eez_sovereign_name = eez_country_name, fao_fishing_id = fao_id) %>%
+    left_join(data_grid_area) %>%
+    mutate(pixel_area_km2 = pixel_area_m2/1000000) %>%
+    mutate(nv_km2 = nv/pixel_area_km2) # calculate hours per km2 here too
+  
+  qs::qsave(all_data_flag, file.path(rdsi_dir, glue("prep/random_forest/artisanal_minderoo/predictions_regional/model_preds_1950_2017_{flag}.qs")))
+}
+
+stopCluster(cl)
+
+
+
+  all_files_flag <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/artisanal_minderoo/predictions_regional/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
+  
+  setdiff(flags, all_files_flag) # 0 - good
+
+```
+

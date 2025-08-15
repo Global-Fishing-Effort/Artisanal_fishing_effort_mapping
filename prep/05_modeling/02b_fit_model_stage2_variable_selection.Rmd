@@ -1,0 +1,423 @@
+---
+title: "Fit prediction model for fishing effort"
+output: html_document
+date: "2024-12-11"
+---
+
+# Summary 
+
+We use the data compiled in the previous scripts to fit a RF regression model to predict the proportion of fishing effort occurring in cells. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library("qs")
+library(foreach)
+library(doParallel)
+library(here)
+library(mgcv)
+library(tictoc)
+library(progress)
+library(terra)
+library(glue)
+library(arrow)
+library(strex)
+library(broom)
+library(ranger)
+
+source(here("R/dir.R"))
+
+```
+
+## Functions to prepare enviro and effort data  
+
+```{r}
+elnino <- read.csv(here("data/model_features/enso_index.csv"))
+
+pdo <- read.csv(here("data/model_features/pdo_index.csv")) 
+
+world_bank <- read.csv(here("data/model_features/world_bank_regions.csv")) 
+
+gfi_df <- read.csv(here("data/model_features/global_fishing_index_governance.csv"))
+
+# Load prepared data
+model_data <- readRDS(here("data/model_features/prepared_data_0.5_all_skylight_sentinel.rds")) %>%
+  mutate(year = as.numeric(year)) %>%
+  filter(year < 2025)
+
+## read in environmental variables
+
+  global_grid <- read.csv(here("data/model_features/global_grid.csv"))
+ 
+
+  ocean_data <- read.csv(here("data/model_features/sst_data.csv")) %>%
+    left_join(qs::qread(here("data/model_features/chl_data.qs"))) %>%
+    left_join(qs::qread(here("data/model_features/wind_data.qs"))) %>%
+    dplyr::select(-pixel_area_m2)
+
+  spatial_data <- global_grid %>%
+    left_join(read.csv(here("data/model_features/gfw_static_spatial_measures.csv")) %>% dplyr::select(-lat, -lon), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/mesopelagiczones/mesopelagiczones_fixed.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/eez/eez_fix.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/fao/fao_fixed.csv")), by = "pixel_id") %>%
+   left_join(read.csv(here("data/model_features/ocean/ocean_fixed.csv")), by = "pixel_id") %>%
+    left_join(read.csv(here("data/model_features/seamounts.csv")), by = "pixel_id") %>% 
+   crossing(., year = c(2009:2024)) 
+  
+  
+  env_data <- spatial_data %>%
+    left_join(ocean_data) %>% # cool.
+    dplyr::select(-geometry_wkt) %>%
+    left_join(elnino) %>%
+    left_join(pdo) %>%
+    left_join(world_bank, by = c("eez_id")) %>%
+    mutate(eez_region_world_bank_7 = ifelse(eez_sovereign %in% c("High seas", "Land"), "High seas", eez_region_world_bank_7)) %>% 
+    left_join(gfi_df, by = c("eez_sovereign" = "flag_fin")) %>% # add in global fishing index data here
+    mutate(gov_score = ifelse(eez_id >= 99999 & is.na(gov_score), "high_seas", gov_score)) %>%
+        mutate(gov_score = ifelse(eez_id < 99999 & is.na(gov_score), "no_data", gov_score)) %>%
+    dplyr::select(-eez_sovereign, -nearest_seamount_id) %>% 
+    distinct() 
+```
+
+```{r}
+
+full_model_formula <- formula(
+  prop_vessels ~ 
+    # Categorical/factor predictors
+    length_category +
+    meso_id +  
+    eez_id + 
+    fao_id + 
+    ocean +  # Spatial categorical variables
+    eez_region_world_bank_7 + # world bank regions
+    gov_score + # global fishing index
+    # Continuous predictors
+    lon + lat + 
+    elevation_m + # depth
+    distance_from_port_m + 
+    distance_from_shore_m +
+    chl_mg_per_m3_mean + 
+    chl_mg_per_m3_sd +
+    sst_c_mean + 
+    sst_c_sd +
+    wind_speed_ms_mean + 
+    wind_speed_ms_sd +
+    enso_index_mean + # el nino data 
+    enso_index_sd + # pacific decadal oscillation
+    pdo_index_mean +  
+    pdo_index_sd + 
+    nearest_seamount_distance_m + 
+    # Year effect
+    year
+)
+
+hist_fish_data <- qs::qread(here("data/model_features/rousseau_total_art_vessels.qs"))
+flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 164 of them
+
+env_grid <- env_data %>% 
+  dplyr::select(lon, lat) %>% distinct()
+
+```
+
+## Run models and variable selection for every individual country
+
+ - calculate the full model using all variables available per flag country
+ - calculate variable importance metrics and root mean squared error (RMSE)
+ - Set a threshold of the 10th quantile of the variable importance (RMSE for regression) and remove any variables with variable importance less than that
+ - Rerun model with new variables and calculate model importance metrics and RMSE again
+ - If the RMSE doesn't DECREASE at all, we stop the model pruning, if it does, we continue, hoping that the RMSE will improve even more in the next iteration. 
+ - If the threshold doesn't remove any variables, we increase the threshold by 1% until a variable is removed, and rerun the process
+ - We loop through this until the RMSE does not improve at all (improvement being a decrease in RMSE)
+  - NOTE: Always keep year as a variable
+ 
+ NOTE: Lower RMSE is better
+
+NOTE: need to check on flags which have very little data. Some of the flags have only ~5 rows of data (flag == "SVN" for example only has 2 rows), so obviously the predictions for these would be horrible. Maybe we want to exclude these and gapfill with something later on? Maybe add a sample size filter? Check to see if these even ran for the classification. If they didn't, we probably won't include them anyways. 
+
+Save full models first 
+
+```{r}
+flags <- unique(hist_fish_data$flag_fin) # get the flags we need to run models for # 164 of them
+
+missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag_fin))
+length(missing_flags) #  these are flags that are in the rousseau data but not in the skylight data, meaning we can't make predictions on them by flag models
+
+flags <- setdiff(flags, missing_flags) # missing 0
+
+
+stage_2_path <- file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_2_models/pruning")
+stage_2_files <- list.files(stage_2_path, full.names = TRUE)
+stage_2_flags <- unique(sub(".*stage_2_rf_train_([A-Z]{3})_.*", "\\1", stage_2_files)) # 147 flags 
+
+
+flags_to_run <- setdiff(flags, stage_2_flags)
+
+num_cores <- 32
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+# Run the loop in parallel
+foreach(flag = flags_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "ranger", "PRROC")) %dopar% {
+
+#  flag = "CHN"
+  
+model_data_flag <- model_data %>%
+  dplyr::select(lon, lat, flag_fin, length_category, year, prop_vessels) %>%
+  filter(flag_fin == flag) %>% 
+  left_join(env_data) %>%
+  na.omit() # removes any NAs
+
+if(flag == "HKG"){
+  model_data_flag <- model_data_flag %>%
+    filter(eez_id != 8603) # Since CHN and HKG have the same cells, if we don't filter this out there will be duplicates
+  
+}
+
+if(nrow(model_data_flag) == 1){
+  next()
+}
+
+# prop_fishing_hours_cell = the proportion of that flag country's fishing effort represented in that cell (per gear, length, and year groupings; see below)
+
+set.seed(123)
+samp <- sample(nrow(model_data_flag), 0.6 * nrow(model_data_flag))  # do 60/40 split since this data is mostly small
+
+train <- model_data_flag[samp, ]
+
+test <- model_data_flag[-samp, ]
+
+tic()
+model <- ranger(
+  formula = full_model_formula,
+  data = train,
+  num.trees = 500, # change to 500 trees?
+  importance = "impurity",  
+  write.forest = TRUE,
+  classification = FALSE
+)
+toc() # half a second for AUS
+
+# Initialize tracking
+var_imp_i <- data.frame(importance(model))
+n_vars <- nrow(var_imp_i)
+
+qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_2_models/pruning/stage_2_rf_train_{flag}_{n_vars}.qs")))
+}
+
+stopCluster(cl)
+
+```
+
+Now apply variable selection methods 
+
+```{r}
+flags_to_run <- setdiff(flags, "")
+
+num_cores <- 32 
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+# Run the loop in parallel
+foreach(flag = flags_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "ranger", "PRROC")) %dopar% {
+
+  # flag = "HKG"
+    rmse_values <- c()
+
+model_data_flag <- model_data %>%
+  dplyr::select(lon, lat, flag_fin, length_category, year, prop_vessels) %>%
+  filter(flag_fin == flag) %>%
+  left_join(env_data) %>%
+  na.omit() 
+
+if(nrow(model_data_flag) == 1){
+  next()
+}
+
+set.seed(123)
+samp <- sample(nrow(model_data_flag), 0.6 * nrow(model_data_flag))  # do 60/40 split since this data is mostly small
+
+train <- model_data_flag[samp, ]
+
+test <- model_data_flag[-samp, ]
+
+
+if(!file.exists(glue(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_2_models/pruning/stage_2_rf_train_{flag}_24.qs")))){
+tic()
+  model <- ranger(
+  formula = full_model_formula,
+  data = train,
+  num.trees = 500, # change this to 500? 
+  importance = "impurity",
+  write.forest = TRUE,
+  classification = FALSE
+)
+toc() 
+}else{
+  
+  model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_2_models/pruning/stage_2_rf_train_{flag}_24.qs")))
+  
+}
+
+
+# Initialize tracking
+var_imp_i <- data.frame(importance(model)) %>%
+  rename("importance" = 1)
+num_vars <- c(nrow(var_imp_i))
+threshold_i <- quantile(var_imp_i[, "importance"], 0.10)  # Use the 10th percentile instead of a fixed multiplier
+n_vars <- nrow(var_imp_i)
+
+  if (threshold_i == 0) {
+    threshold_i <- 0.0000001
+  }
+
+pred_props <- predict(model, data = test)$predictions
+rmse <- sqrt(mean((test$prop_vessels - pred_props)^2)) # use RMSE for probabilities instead?
+
+rmse_values <- c(rmse_values, rmse)
+
+# Iteratively remove low-importance variables
+iteration <- 1
+while (TRUE) {
+  
+  # Select variables above threshold
+    selected_vars <- var_imp_i %>%
+      filter(importance > threshold_i) %>%
+      row.names()
+    
+    selected_vars <- unique(c("year", selected_vars)) # always retain year and the ais reception data (for ais data biases)
+    
+  # Stop if too few variables remain
+  if (length(selected_vars) < 6) break  # Avoid over-pruning. We can change this to any number of variables. Maybe 10 would be better computationally? 
+  
+          # Increase the threshold iteratively until at least one variable is removed
+    while (length(selected_vars) == num_vars[length(num_vars)]) {
+        threshold_i <- threshold_i * 1.01  # Increase threshold by 1%
+
+    selected_vars <- var_imp_i %>%
+      filter(importance > threshold_i) %>%
+      row.names()
+    
+    selected_vars <- unique(c("year", selected_vars)) # always retain year and the ais reception data (for ais data biases)
+        
+    }
+    
+  n_vars <- length(selected_vars)
+  file_path <-   glue(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_2_models/pruning/stage_2_rf_train_{flag}_{n_vars}.qs"))
+
+  
+  if(!file.exists(file_path)){
+    
+ model_i <- ranger(
+  formula = prop_vessels ~.,
+  data = train[, c("prop_vessels", selected_vars)],
+  num.trees = 500, # change to 500? 
+  importance = "impurity",
+  write.forest = TRUE,
+  classification = FALSE
+)
+
+  }else{
+    model_i <- qs::qread(file_path)
+  }
+  
+  # Get new variable importance
+  var_imp_i <- data.frame(importance(model_i)) %>%
+    rename("importance" = 1)
+
+  threshold_i <- quantile(var_imp_i[, 1], 0.1) # calculate new threshold since variable importance metric will change
+  
+  # Compute new RMSE
+  pred_props_i <- predict(model, data = test)$predictions
+  rmse_i <- sqrt(mean(test$prop_vessels - pred_props_i)^2)
+  
+  # Store metrics
+  rmse_values <- c(rmse_values, rmse_i)
+  num_vars <- c(num_vars, length(selected_vars))
+
+  
+  if(!file.exists(file_path)){
+    # save model here. Put number of variables (length(selected_vars)) in model save name so we know which one to pick for best predictions. 
+  qs::qsave(model_i, file_path)
+  }
+
+  # Check RMSE stability: Stop if no improvement
+  if (length(rmse_values) > 1) {
+    
+    rmse_improvement <- (rmse_values[length(rmse_values) - 1] - rmse_values[length(rmse_values)]) / rmse_values[length(rmse_values) - 1]
+    
+    if (rmse_improvement <= 0) break  # Stop if RMSE stabilizes
+    
+  }
+
+  iteration <- iteration + 1
+}
+
+}
+
+stopCluster(cl)
+
+```
+
+Now write code to select the "best" model per the variable selection from above. We will rerun the model with just those variables on the FULL dataset to leverage all of the data from GFW and save
+
+```{r}
+# grab the flags that were run in the folder
+stage_2_path <- file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_2_models/pruning")
+stage_2_files <- list.files(stage_2_path, full.names = TRUE)
+stage_2_flags <- unique(sub(".*stage_2_rf_train_([A-Z]{3})_.*", "\\1", stage_2_files)) # 147 flags 
+
+num_cores <- 32
+cl <- makeCluster(num_cores)
+registerDoParallel(cl)
+
+# Run the loop in parallel
+foreach(flag = stage_2_flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "ranger", "PRROC", "strex")) %dopar% {
+
+#  flag = "HKG"
+  flag_files <- list.files(stage_2_path, pattern = glue("_{flag}_"))
+  # select the model with the next to lowest number of variables. E.g., if the final model run for ZAF is 17, then we want to grab the model with the next to lowest number of variables, which is 19. 
+  n_variables <- as.numeric(str_before_first(str_after_last(flag_files, "_"), "\\."))
+  
+  if(length(n_variables) > 1){
+  best_model_n <- as.character(sort(n_variables[2]))
+  }else{
+    best_model_n <- as.character(n_variables[1])
+  }
+  
+  best_train_model <- qs::qread(file.path(stage_2_path, glue("stage_2_rf_train_{flag}_{best_model_n}.qs")))
+  
+  expanded_formula <- as.formula(
+  paste("prop_vessels ~", paste(best_train_model$forest$independent.variable.names, collapse = " + "))
+)
+
+  rf_formula <- as.formula(deparse(formula(expanded_formula)) |> paste(collapse = " "))
+  
+model_data_flag <- model_data %>%
+  dplyr::select(lon, lat, flag_fin, length_category, year, prop_vessels) %>%
+  filter(flag_fin == flag) %>% 
+  left_join(env_data) %>%
+  na.omit()
+
+if(nrow(model_data_flag) == 1){
+  next()
+} # skip if not enough data, I don't think this is a worry here but just in case.
+
+
+tic()
+model <- ranger(
+  formula = rf_formula,
+  data = model_data_flag,
+  num.trees = 500,
+  importance = "impurity", 
+  write.forest = TRUE,
+  classification = FALSE
+)
+toc() 
+
+
+qs::qsave(model, glue(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_2_models/stage_2_rf_model_full_data_{flag}_{best_model_n}.qs")))
+}
+
+stopCluster(cl)
+```

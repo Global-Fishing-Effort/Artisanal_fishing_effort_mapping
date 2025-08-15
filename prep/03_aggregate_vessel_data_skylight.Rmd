@@ -1,0 +1,208 @@
+---
+title: "Aggregate vessel data and calculate proportions"
+output: html_document
+date: "2025-07-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(here)
+library(tidyverse)
+library(terra)
+library(dplyr)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(qs)
+library(janitor)
+
+source(here("R/dir.R"))
+
+data_grid_raw <- read.csv(here("data/model_features/global_grid.csv"))
+
+data_grid <- data_grid_raw %>%
+  st_drop_geometry() %>%
+  dplyr::select(pixel_id, lon, lat)
+```
+
+Read in vessel detection data 
+
+```{r}
+
+vessels_raw <- qs::qread(here("data/vessels/all_batch_lengths_year.qs"))
+
+# what is the resolution of this data? 
+# the raw imagery is 1km by 1km. 
+
+```
+
+Read in raw Rousseau country level data
+
+```{r}
+# codes used in rousseau et al
+country_codes <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv")
+
+# country level effort data
+rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FishingCountry_LengthBoat_Gear_Sector.csv") %>%
+  filter(!is.na(Length_Category)) %>%
+  dplyr::select(-X) %>%
+  clean_names()
+```
+
+Categorize vessel lengths in the raw detection data
+
+```{r}
+vessels_length_fix <- vessels_raw %>% 
+  mutate(length_category = case_when(
+    vessel_length_m < 6  ~ "Less than 6m",
+    vessel_length_m >= 6 & vessel_length_m < 12 ~ "6-12m",
+    vessel_length_m >= 12 & vessel_length_m < 24 ~ "12-24m",
+    vessel_length_m >= 24 & vessel_length_m <= 50 ~ "24-50m",
+    vessel_length_m > 50 ~ "Over 50m",
+    TRUE ~ NA
+  )) %>%
+  filter(is_in_water == "True") %>% 
+  dplyr::group_by(centroid_lon, centroid_lat, vessel_length_m, year, length_category) %>%
+  summarise(nv = n()) %>%
+  ungroup()
+
+colnames(vessels_length_fix)
+
+```
+
+
+Aggregate and save data to 0.5 and 1 degree
+
+```{r}
+
+# Function to round to nearest 0.5
+round_to_half <- function(x) {
+  round(x * 2) / 2
+}
+
+# Aggregate from 0.1 to 0.5 degree cells
+vessels_grouped_aggregated_5 <- vessels_length_fix %>%
+  # Round coordinates to nearest 0.5 degree
+  mutate(
+    x_05 = round_to_half(centroid_lon),
+    y_05 = round_to_half(centroid_lat)
+  ) %>%
+  # Group by rounded coordinates and existing grouping variables
+  group_by(x_05, y_05, year, length_category) %>%
+  # Aggregate numeric columns
+  summarise(
+    nv = sum(nv) # Sum the vessel counts
+  ) %>%
+  ungroup() %>%
+  # Rename coordinates back to original names if needed
+  rename(x = x_05, y = y_05) 
+
+
+
+# Aggregate from 0.1 to 0.5 degree cells
+vessels_grouped_aggregated_1 <- vessels_length_fix %>%
+  # Round coordinates to nearest 1 degree
+  mutate(
+    x_1 = round(centroid_lon),
+    y_1 = round(centroid_lat)
+  ) %>%
+  # Group by rounded coordinates and existing grouping variables
+  group_by(x_1, y_1, year, length_category) %>%
+  # Aggregate numeric columns
+  summarise(
+    nv = sum(nv) # Sum the vessel counts
+  ) %>%
+  ungroup() %>%
+  # Rename coordinates back to original names if needed
+  rename(x = x_1, y = y_1) 
+
+
+```
+
+Figure out the flag country of each detection. We are assuming that the EEZ the vessel is fishing in is its flag country. 
+
+         - “We make the reasonable assumption that the small-scale fishing sub-sector only operates within domestic waters (i.e., in their nation’s EEZ, <200 NM from shore). There are a few exceptions to this assumption, however, the total value of fish caught by this sub-sector in non-domestic waters is negligible [32].” https://www.sciencedirect.com/science/article/pii/S0308597X23001380 
+         
+         
+```{r}
+
+vessels_agg_5_eez <- vessels_grouped_aggregated_5 %>%
+  left_join(data_grid, by = c("x" = "lon", "y" = "lat"))
+
+# test <- vessels_agg_5_eez %>%
+#   filter(is.na(pixel_id)) # 2000 missing.. what happened? These are all being classified as land. So we should assign them to the next closest cell that is non NA pixel id instead? 
+# 
+# mapview::mapview(test, xcol = "x", ycol = "y")
+
+## we need to assign the values in the NA cells to the closest non-NA pixel id cell, we'll do this using nearest neighbor search:
+library(FNN) # For nearest neighbor search
+# 1. Separate rows with and without pixel_id
+missing_pixel <- vessels_agg_5_eez %>% filter(is.na(pixel_id))
+with_pixel <- vessels_agg_5_eez %>% filter(!is.na(pixel_id))
+
+# 2. Prepare coordinate matrices
+# Coordinates to match (from data_grid)
+grid_coords <- data_grid %>%
+  dplyr::select(lon, lat) %>%
+  as.matrix()
+
+# Coordinates needing assignment (from vessel detections without pixel_id)
+missing_coords <- missing_pixel %>%
+  dplyr::select(x, y) %>%
+  as.matrix()
+
+# 3. Find nearest grid cell using FNN
+nearest <- get.knnx(grid_coords, missing_coords, k = 1)
+
+# 4. Map closest grid pixel_id back to the rows
+nearest_pixel_ids <- data_grid$pixel_id[nearest$nn.index[, 1]]
+
+
+# 5. Assign these pixel_ids back to the missing rows
+missing_pixel$pixel_id <- nearest_pixel_ids
+
+# 6. Combine back into the full dataset
+vessels_agg_5_eez_filled <- bind_rows(with_pixel, missing_pixel) %>%
+  dplyr::select(-x, -y) %>%
+  left_join(data_grid) %>%
+  group_by(lon, lat, pixel_id, year, length_category) %>%
+  summarise(nv = sum(nv, na.rm = TRUE)) %>%
+  ungroup() # makes sense
+
+# read in EEZ data 
+eez_lookup <- read.csv(here("data/model_features/eez/eez_lookup_fix.csv"))
+eez_df <- read.csv(here("data/model_features/eez/eez_fix.csv")) %>%
+  left_join(eez_lookup)
+
+
+vessel_agg_5_flag <- vessels_agg_5_eez_filled %>%
+  left_join(eez_df) %>%
+  mutate(flag_fin = eez_sovereign) # assume flag country = eez country
+
+length(unique(vessel_agg_5_flag$eez_id)) # 72 flags
+
+test_hkg <- vessel_agg_5_flag %>%
+  filter(pixel_id == 120609) %>%
+  filter(eez_sovereign == "HKG")
+
+vessel_agg_5_flag_fix <- vessel_agg_5_flag %>%
+  filter(pixel_id != 120609) %>%
+  rbind(., test_hkg)
+
+
+```
+
+Now calculate the proportion of each flag country's vessels are in each cell for each year and length category
+
+```{r}
+vessel_agg_5_props <- vessel_agg_5_flag_fix %>%
+  group_by(flag_fin, length_category, year) %>%
+  mutate(total_vessels = sum(nv)) %>%
+  ungroup() %>%
+  mutate(prop_vessels = nv/total_vessels) # could be better to only group by flag fin and year for this one? 
+
+qs::qsave(vessel_agg_5_props, here("data/vessels/vessels_prop_05_deg_skylight.qs"))
+
+```
+

@@ -1,0 +1,305 @@
+---
+title: "Calculate vessel lengths, centroids, and years"
+output: html_document
+date: "2025-05-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(here)
+library(tidyverse)
+library(terra)
+library(dplyr)
+library(geosphere)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(qs)
+
+source(here("R/dir.R"))
+```
+
+```{r}
+vessels_batch1 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/vessel.csv"))
+vessels_batch2 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_2/vessel.csv"))
+vessels_batch3 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_3/vessel.csv"))
+
+colnames(vessels_batch1)
+colnames(vessels_batch2)
+colnames(vessels_batch3)
+
+```
+
+
+Lets rasterize vessel detections
+
+```{r}
+# Function to calculate centroid from 4 WGS84 corners
+get_centroid_coords <- function(x1, y1, x2, y2, x3, y3, x4, y4) {
+  # Make matrix of coordinates
+  coords <- matrix(c(x1, y1,
+                     x2, y2,
+                     x3, y3,
+                     x4, y4,
+                     x1, y1),  # Close the polygon
+                   ncol = 2, byrow = TRUE)
+  
+  # Create polygon and calculate centroid
+  poly <- st_polygon(list(coords)) |> st_sfc(crs = 4326)
+  centroid <- st_centroid(poly)
+  return(st_coordinates(centroid))
+}
+
+
+# Apply to each row of the dataframe
+vessels_batch_df <- vessels_batch1 %>%
+  mutate(batch = 1) %>%
+  rbind(vessels_batch3 %>% dplyr::select(colnames(vessels_batch1)) %>% mutate(batch = 3)) %>%
+  rbind(vessels_batch2 %>% dplyr::select(colnames(vessels_batch1)) %>% mutate(batch = 2)) %>%
+  rowwise() %>%
+  mutate(
+    centroid = list(get_centroid_coords(wgs84_x1, wgs84_y1,
+                                        wgs84_x2, wgs84_y2,
+                                        wgs84_x3, wgs84_y3,
+                                        wgs84_x4, wgs84_y4)),
+    centroid_lon = centroid[1],
+    centroid_lat = centroid[2]
+  ) %>%
+  ungroup() %>%
+  select(-centroid) 
+
+qs::qsave(vessels_batch_df, here("data/vessels/all_batch_centroids.qs"))
+
+vessels_batch_df <- qs::qread(here("data/vessels/all_batch_centroids.qs"))
+
+## calculate vessel lengths
+
+# Function to compute vessel length from 4 WGS84 corner points
+compute_vessel_length <- function(x1, y1, x2, y2, x3, y3, x4, y4) {
+  corners <- matrix(c(x1, y1,
+                      x2, y2,
+                      x3, y3,
+                      x4, y4), ncol = 2, byrow = TRUE)
+  
+  # Compute all pairwise geodesic distances
+  dists <- distm(corners, fun = distGeo)
+  
+  # Return maximum distance in meters
+  return(max(dists))
+}
+
+colnames(vessels_batch_df)
+
+  vessel_lengths <- vessels_batch_df %>% 
+    rowwise() %>%
+    mutate(
+      vessel_length_m = compute_vessel_length(
+        wgs84_x1, wgs84_y1,
+        wgs84_x2, wgs84_y2,
+        wgs84_x3, wgs84_y3,
+        wgs84_x4, wgs84_y4
+      )
+   ) %>%
+  ungroup()
+
+  
+## add date information 
+  
+images_batch1 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/image.csv")) %>%
+    mutate(land_sq_km = NA,
+         water_sq_km = NA)
+images_batch2 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_2/image.csv")) 
+images_batch3 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_3/image.csv")) # 2009-2021!?
+
+all_images <- images_batch3 %>%
+  mutate(batch = 3) %>%
+  rbind(., images_batch1 %>% mutate(batch = 1)) %>%
+    rbind(., images_batch2 %>% mutate(batch = 2)) %>%
+  filter(timestamp != "unknown") %>%
+  mutate(year = year(timestamp),
+         month = month(timestamp),
+         day = day(timestamp),
+         date = date(timestamp)) %>%
+  dplyr::distinct(fname, year, month, day, date, batch)
+
+
+vessels_final <- vessel_lengths %>%
+  left_join(all_images, by = c("fname", "batch"))
+  
+
+qs::qsave(vessels_final, here("data/vessels/all_batch_lengths_year.qs"))
+
+```
+
+Explore the data 
+
+```{r}
+vessels_final <- qs::qread(here("data/vessels/all_batch_lengths_year.qs"))
+
+test <- vessels_final %>%
+  filter(vessel_length_m >= 50,
+         is_in_water == "True") 
+
+# 1. Round centroid coordinates to any resolution you prefer
+cell_size <- 1 # You can change this to 1, 0.5, 0.01, 0.05, etc.
+
+vessel_batch_counts <- vessels_batch_df %>%
+  filter(is_in_water == "True") %>%
+  mutate(
+    lon_bin = floor(centroid_lon / cell_size) * cell_size,
+    lat_bin = floor(centroid_lat / cell_size) * cell_size
+  ) %>%
+  group_by(lon_bin, lat_bin) %>%
+  summarise(vessel_count = n(), .groups = "drop")
+
+# 2. Convert to spatial object
+vessel_points <- st_as_sf(vessel_batch_counts, coords = c("lon_bin", "lat_bin"), crs = 4326)
+
+# 3. Rasterize to a SpatRaster
+# Create an empty raster that covers your area
+r_template <- rast(
+  extent = ext(min(vessel_batch_counts$lon_bin), max(vessel_batch_counts$lon_bin) + cell_size,
+               min(vessel_batch_counts$lat_bin), max(vessel_batch_counts$lat_bin) + cell_size),
+  resolution = cell_size,
+  crs = "EPSG:4326"
+)
+
+# Rasterize vessel count
+vessel_rast <- rasterize(vessel_points, r_template, field = "vessel_count", fun = "sum")
+
+vessel_rast
+
+writeRaster(vessel_rast, here("data/vessels/all_batch_counts_1deg.tif"), overwrite = TRUE)
+
+# Get country borders
+countries <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Plot raster
+vessel_rast_log <- log1p(vessel_rast)
+plot(vessel_rast_log, main = "Log Vessel Density", col = hcl.colors(20, "Inferno"), maxcell = Inf)
+plot(st_geometry(countries), add = TRUE, border = "black", lwd = 0.5)
+
+
+# Plot raster
+plot(vessel_rast, main = "Vessel Density", col = hcl.colors(20, "Inferno"), maxcell = Inf)
+plot(st_geometry(countries), add = TRUE, border = "black", lwd = 0.5)
+
+
+# Create binary presence-absence raster
+vessel_binary <- classify(vessel_rast, rcl = matrix(c(-Inf, 0, NA, 0, Inf, 1), ncol = 3, byrow = TRUE))
+
+# Plot presence-absence
+plot(vessel_binary, main = "Vessel Detections", col = "red", legend = FALSE)
+plot(st_geometry(countries), add = TRUE, border = "black", lwd = 0.5)
+
+```
+
+
+Brainstorming: 
+
+How to determine flag country? 
+ - we will be assuming that if flag country = eez area where the vessel is detected. So we will have to count the number of vessels detected in each eez and calculate a proportion in each cell? 
+
+Vessel IDs:
+ - Are they unique across the batches? For example, is vessel id 0 the same in batch 1 as in batch 3? 
+   - "The idx column in vessel.csv is not unique between files. They use a combination of fname column and idx column for naming the vessel crops so that it is unique, but that assumes your filenames are unique. Across the three batches, the filename and idx combined should be unique, but this is not guaranteed since it is possible there are locations that are duplicated across the batches."
+   - Ok so they aren't unique across batches. Are they unique across images?? From their response it doesn't seem like it. "The idx column in vessel.csv is not unique between files". But then what do the idx tell us?? Are they only unique within the image pulls? Yes. 
+
+
+
+Explore vessel IDs 
+
+```{r}
+images_batch1 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/image.csv")) %>%
+    mutate(land_sq_km = NA,
+         water_sq_km = NA)
+images_batch2 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_2/image.csv")) 
+images_batch3 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_3/image.csv")) # 2009-2021!?
+
+all_images <- images_batch3 %>%
+  mutate(batch = 3) %>%
+  rbind(., images_batch1 %>% mutate(batch = 1)) %>%
+    rbind(., images_batch2 %>% mutate(batch = 2)) %>%
+  filter(timestamp != "unknown") %>%
+  mutate(year = year(timestamp),
+         month = month(timestamp),
+         day = day(timestamp),
+         date = date(timestamp)) %>%
+  dplyr::distinct(fname, year, month, day, date, batch)
+
+# Are they unique within a day? We can look at image.csv to get the dates of the images and match to our vessel.csv
+
+test <- vessels_batch_df %>%
+  left_join(all_images) %>%
+  filter(year == 2013,
+         day == 03,
+         month == 03) %>%
+  filter(batch == 3) # if they were unique across days we would see idx increasing by 1 and they dont
+
+# not unique within a day it appears 
+
+# are they unique within an image? 
+
+test <- vessels_batch_df %>%
+  left_join(all_images) %>%
+  filter(batch == 2) %>%
+  group_by(fname) %>%
+  summarise(n())
+
+# 139.6572_35.377.tif has the most observations
+test <- vessels_batch_df %>%
+  left_join(all_images) %>%
+  filter(batch == 2) %>%
+  filter(fname == "67.148203972_24.799790757.tif")
+# doesn't appear to be unique within an image. If idx was then we would have all numbers from 0 to 4435 in this and it doesn't
+
+test2 <- rast("/home/ubuntu/data_storage/raw_data/minderoo_skylight/unzipped_3/vis/139.6572_35.377.tif") # ok so why doesn't this exist..? 
+
+  # 139.6572_35.377.tif has the most observations
+test <- vessels_batch_df %>%
+  left_join(all_images) %>%
+  filter(batch == 3) %>%
+  filter(fname == "139.6572_35.377.tif")
+# doesn't appear to be unique within an image. If idx was then we would have all numbers from 0 to 4435 in this and it doesn't
+
+  
+# so are they unique across images within the same batch? 
+
+
+# 1. Round centroid coordinates to any resolution you prefer
+cell_size <- 1 # You can change this to 1, 0.5, 0.01, 0.05, etc.
+
+vessel_batch_counts <- vessels_batch_df %>%
+  filter(idx == 0, 
+         batch == 1) %>%
+  mutate(
+    lon_bin = floor(centroid_lon / cell_size) * cell_size,
+    lat_bin = floor(centroid_lat / cell_size) * cell_size
+  ) %>%
+  group_by(lon_bin, lat_bin) %>%
+  summarise(vessel_count = n(), .groups = "drop")
+
+# 2. Convert to spatial object
+vessel_points <- st_as_sf(vessel_batch_counts, coords = c("lon_bin", "lat_bin"), crs = 4326)
+
+# 3. Rasterize to a SpatRaster
+# Create an empty raster that covers your area
+r_template <- rast(
+  extent = ext(min(vessel_batch_counts$lon_bin), max(vessel_batch_counts$lon_bin) + cell_size,
+               min(vessel_batch_counts$lat_bin), max(vessel_batch_counts$lat_bin) + cell_size),
+  resolution = cell_size,
+  crs = "EPSG:4326"
+)
+
+# Rasterize vessel count
+vessel_rast <- rasterize(vessel_points, r_template, field = "vessel_count", fun = "sum")
+
+vessel_rast
+
+plot(vessel_rast) # ok, so it seems like the vessel IDs are not unique ACROSS image files within a batch either. Just looking at idx == 0 and batch == 1 gives us cells all over the place, which probably doesn't make sense...
+
+## So how are they unique?! The original email from skylight/Jessica says taht within each image the idx is unique. But when we look at an individual image that doesn't appear to be the case?? 
+
+```
+
