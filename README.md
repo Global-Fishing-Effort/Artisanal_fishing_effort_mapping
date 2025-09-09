@@ -3,7 +3,7 @@
 
 This is a repository for spatialising country-level artisanal fishing effort data from
 [Rousseau et al. 2019 and 2024](https://metadata.imas.utas.edu.au/geonetwork/srv/eng/catalog.search#/metadata/1241a51d-c8c2-4432-aa68-3d2bae142794)
-to grid cells, based on observed, high resolution, satellite imagery from Skylight (provided by Minderoo) and [observed Sentinel 2 Satellite Imagery from Global Fishing Watch
+to grid cells, based on observed, high resolution, satellite vessel detections from Skylight (provided by Minderoo) and [observed Sentinel 2 Satellite Imagery from Global Fishing Watch
 data](https://globalfishingwatch.org/data-download/datasets/public-sentinel2-vessel-detections%3Av1.0)
 (a top-down approach). We apply a similar methodology to that of [McDonald et al. 2024](https://www.pnas.org/doi/10.1073/pnas.2400592121)
 
