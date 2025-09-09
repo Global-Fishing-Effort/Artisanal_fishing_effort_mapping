@@ -13,7 +13,7 @@ editor_options:
 
 # Summary 
 
-Spatially and temporally aggregate errdap data to 0.5 and 1 degree grids
+Spatially and temporally aggregate errdap data to 0.5 grid
 
 ```{r echo = FALSE}
 # This chunk sets up default settings for all chunks below
@@ -265,7 +265,7 @@ qs::qsave(chl_data_imputed, here("data/model_features/chl_data.qs")) # only 35 M
 ```
 
 
-# Now we prep the same data to a 1 degree by 1 degree grid
+# Code to prep the same data to a 1 degree by 1 degree grid if needed
 
 ## Defining our global grid
 

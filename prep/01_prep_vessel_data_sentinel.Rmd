@@ -1,8 +1,15 @@
 ---
-title: "Calculate vessel lengths, centroids, and years"
+title: "Prepare satelitte imagery data from Sentinel-2"
 output: html_document
 date: "2025-07-29"
 ---
+
+## Summary
+
+Here we prep data Sentinel-2 satellite imagery vessel detections from Global Fishing Watch (10-meter resolution) to use in our models. First, you will need to download the data from here: https://globalfishingwatch.org/data-download/datasets/public-sentinel2-vessel-detections%3Av1.0
+
+Reference: 
+Global Fishing Watch, 2025. 2019 (annual data) Vessel detections from Sentinel 2. https://doi.org/10.5281/ZENODO.15978309
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -21,11 +28,8 @@ library(doParallel)
 
 source(here("R/dir.R"))
 ```
-
-Data from here: https://globalfishingwatch.org/data-download/datasets/public-sentinel2-vessel-detections%3Av1.0
- - 10 meter resolution
  
-Let's explore one file: 
+Let's explore one file from July 2025, since other files are much larger and unwieldy: 
 
 ```{r}
 # read in smallest data and take a look
@@ -55,7 +59,7 @@ non_mmsi_keep <- vessels_july_df %>%
 
 mmsi_remove <- vessels_july_df %>%
   filter(!is.na(mmsi), 
-         matching_confidence >= 0.5) # remove any that have mmsi, assuming these are already captured in our industrial modelling. 
+         matching_confidence >= 0.5) # remove any that have mmsi, assuming these are industrial vessels
 
 mmsi_keep <- vessels_july_df %>%
   filter(!is.na(mmsi),
@@ -66,7 +70,7 @@ vessels_df_fin <- rbind(non_mmsi_keep, mmsi_keep) %>%
 
 ```
 
-Ok, so now we should apply the same filtering as above, but to all files. We will need a file for each year that is lon, lat, length_m_inferred, and year. Each row represents a vessel detection. 
+Now we apply the same filtering as above, but to all files. We will need a file for each year that is lon, lat, length_m_inferred, and year. Each row represents a vessel detection. 
 
 ```{r}
 sentinel_files <- list.files(file.path(rdsi_raw_dir, "global_fishing_watch/sentinel_2_data"), full.names = TRUE, pattern = "csv")
@@ -103,7 +107,7 @@ foreach(file = sentinel_files[2:13],
   vessels_df_fin$year <- years
   
   out_name <- paste0("filtered_", tools::file_path_sans_ext(basename(file)), ".csv")
-  write.csv(vessels_df_fin, file = file.path(rdsi_dir, "prep/sentinel_2_prepped/prepped_10m_res", out_name), row.names = FALSE)
+  write.csv(vessels_df_fin, file = file.path(rdsi_dir, "prep/sentinel_2_prepped/prepped_10m_res", out_name), row.names = FALSE) # save to your large file storage
   
 }
 
@@ -133,23 +137,6 @@ vessel_batch_counts <- vessels_final %>%
 
 plot(vessel_batch_counts) # cool, looks like the whole globe. 
 
-vessels_skylight <- qs::qread(here("data/vessels/all_batch_lengths_year.qs"))
-
-
-# 1. Round centroid coordinates to any resolution you prefer
-cell_size <- 0.5 # You can change this to 1, 0.5, 0.01, 0.05, etc.
-
-vessel_rast_sky <- vessels_skylight %>%
-  filter(is_in_water == "True") %>%
-  mutate(
-    lon_bin = floor(centroid_lon / cell_size) * cell_size,
-    lat_bin = floor(centroid_lat / cell_size) * cell_size
-  ) %>%
-  group_by(lon_bin, lat_bin) %>%
-  summarise(vessel_count = n(), .groups = "drop") %>%
-  rast(., type = "xyz")
-
-plot(vessel_rast_sky)
 
 ```
 
@@ -157,107 +144,5 @@ plot(vessel_rast_sky)
 Brainstorming: 
 
 How to determine flag country? 
- - we will be assuming that if flag country = eez area where the vessel is detected. So we will have to count the number of vessels detected in each eez and calculate a proportion in each cell? 
-
-Vessel IDs:
- - Are they unique across the batches? For example, is vessel id 0 the same in batch 1 as in batch 3? 
-   - "The idx column in vessel.csv is not unique between files. They use a combination of fname column and idx column for naming the vessel crops so that it is unique, but that assumes your filenames are unique. Across the three batches, the filename and idx combined should be unique, but this is not guaranteed since it is possible there are locations that are duplicated across the batches."
-   - Ok so they aren't unique across batches. Are they unique across images?? From their response it doesn't seem like it. "The idx column in vessel.csv is not unique between files". But then what do the idx tell us?? Are they only unique within the image pulls? Yes. 
-
-
-
-Explore vessel IDs 
-
-```{r}
-images_batch1 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/image.csv")) %>%
-    mutate(land_sq_km = NA,
-         water_sq_km = NA)
-images_batch2 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_2/image.csv")) 
-images_batch3 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_3/image.csv")) # 2009-2021!?
-
-all_images <- images_batch3 %>%
-  mutate(batch = 3) %>%
-  rbind(., images_batch1 %>% mutate(batch = 1)) %>%
-    rbind(., images_batch2 %>% mutate(batch = 2)) %>%
-  filter(timestamp != "unknown") %>%
-  mutate(year = year(timestamp),
-         month = month(timestamp),
-         day = day(timestamp),
-         date = date(timestamp)) %>%
-  dplyr::distinct(fname, year, month, day, date, batch)
-
-# Are they unique within a day? We can look at image.csv to get the dates of the images and match to our vessel.csv
-
-test <- vessels_batch_df %>%
-  left_join(all_images) %>%
-  filter(year == 2013,
-         day == 03,
-         month == 03) %>%
-  filter(batch == 3) # if they were unique across days we would see idx increasing by 1 and they dont
-
-# not unique within a day it appears 
-
-# are they unique within an image? 
-
-test <- vessels_batch_df %>%
-  left_join(all_images) %>%
-  filter(batch == 2) %>%
-  group_by(fname) %>%
-  summarise(n())
-
-# 139.6572_35.377.tif has the most observations
-test <- vessels_batch_df %>%
-  left_join(all_images) %>%
-  filter(batch == 2) %>%
-  filter(fname == "67.148203972_24.799790757.tif")
-# doesn't appear to be unique within an image. If idx was then we would have all numbers from 0 to 4435 in this and it doesn't
-
-test2 <- rast("/home/ubuntu/data_storage/raw_data/minderoo_skylight/unzipped_3/vis/139.6572_35.377.tif") # ok so why doesn't this exist..? 
-
-  # 139.6572_35.377.tif has the most observations
-test <- vessels_batch_df %>%
-  left_join(all_images) %>%
-  filter(batch == 3) %>%
-  filter(fname == "139.6572_35.377.tif")
-# doesn't appear to be unique within an image. If idx was then we would have all numbers from 0 to 4435 in this and it doesn't
-
-  
-# so are they unique across images within the same batch? 
-
-
-# 1. Round centroid coordinates to any resolution you prefer
-cell_size <- 1 # You can change this to 1, 0.5, 0.01, 0.05, etc.
-
-vessel_batch_counts <- vessels_batch_df %>%
-  filter(idx == 0, 
-         batch == 1) %>%
-  mutate(
-    lon_bin = floor(centroid_lon / cell_size) * cell_size,
-    lat_bin = floor(centroid_lat / cell_size) * cell_size
-  ) %>%
-  group_by(lon_bin, lat_bin) %>%
-  summarise(vessel_count = n(), .groups = "drop")
-
-# 2. Convert to spatial object
-vessel_points <- st_as_sf(vessel_batch_counts, coords = c("lon_bin", "lat_bin"), crs = 4326)
-
-# 3. Rasterize to a SpatRaster
-# Create an empty raster that covers your area
-r_template <- rast(
-  extent = ext(min(vessel_batch_counts$lon_bin), max(vessel_batch_counts$lon_bin) + cell_size,
-               min(vessel_batch_counts$lat_bin), max(vessel_batch_counts$lat_bin) + cell_size),
-  resolution = cell_size,
-  crs = "EPSG:4326"
-)
-
-# Rasterize vessel count
-vessel_rast <- rasterize(vessel_points, r_template, field = "vessel_count", fun = "sum")
-
-vessel_rast
-
-plot(vessel_rast) # ok, so it seems like the vessel IDs are not unique ACROSS image files within a batch either. Just looking at idx == 0 and batch == 1 gives us cells all over the place, which probably doesn't make sense...
-
-## So how are they unique?! The original email from skylight/Jessica says taht within each image the idx is unique. But when we look at an individual image that doesn't appear to be the case?? 
-
-```
+ - we will be assuming that if flag country = eez area where the vessel is detected. So we will have to count the number of vessels detected in each eez and calculate a proportion in each cell.
 

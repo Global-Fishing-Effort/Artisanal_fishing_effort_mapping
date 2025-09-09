@@ -1,8 +1,13 @@
 ---
-title: "Aggregate vessel data and calculate proportions"
+title: "Aggregate vessel data and calculate proportions Skylight"
 output: html_document
 date: "2025-07-22"
 ---
+
+## Summary
+
+Here we aggregate the Skylight data to 0.5 by 0.5 degree, matching our analysis grid
+
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)

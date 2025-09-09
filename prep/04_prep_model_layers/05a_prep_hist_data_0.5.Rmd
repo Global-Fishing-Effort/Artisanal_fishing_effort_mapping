@@ -1,5 +1,5 @@
 ---
-title: "Prep historical environmental data for 0.5 degrees"
+title: "Prep historical environmental data to 0.5 degrees"
 author: "Gage Clawson (IMAS)"
 date: '`r format(Sys.time(), "%m/%d/%Y")`'
 output: 
@@ -12,7 +12,7 @@ editor_options:
 ---
 
 # Summary 
-Prep historical SST, CHL, and wind data for 0.5 degrees
+Prep historical SST, CHL, and wind data for 0.5 degrees from ISIMIP climate projections
 
 ```{r}
 # Load all necessary packages
@@ -235,7 +235,7 @@ CHL now:
  - bias correct with mean for 2014 (matching year)
  - calculate yearly average and save
  
- - ERRDAP data is surface chlorophyll-a (mg/m3). The ISIMIP data is chlorophyll-a
+ - ERRDAP data is surface chlorophyll-a (mg/m3). The ISIMIP data is also chlorophyll-a
 
 ```{r}
 ## lets prep chl data. They provide monthly at 60 arc mins (1 degree). We want yearly average and sd. Will need to reproject to our projection likely. 

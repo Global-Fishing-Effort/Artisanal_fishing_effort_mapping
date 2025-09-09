@@ -142,12 +142,8 @@ static_spatial_measures %>%
 
 ```
 
-
-
-
 # Determine FAO region of each cell 
-https://data.apps.fao.org/map/catalog/srv/eng/catalog.search#/metadata/ac02a460-da52-11dc-9d70-0017f293bd28d
-
+https://www.marineregions.org/gazetteer.php?p=details&id=22541
 
 ```{r}
 ## see if we can fill the missing fao_id pixels using different method 
@@ -242,7 +238,7 @@ write.csv(fao_lookup_fin, here("data/model_features/fao/fao_fixed.csv"), row.nam
 
 ```
 
-# Determine if cell is mesopelagic zone or not 
+# Determine mesopelagic region of each cell
 
 Use Marine Region's [Mesopelagic ecoregions of the world's oceans](https://www.sciencedirect.com/science/article/pii/S0967063717301437?via%3Dihub#ack0005)
 
@@ -315,7 +311,6 @@ write.csv(meso_lookup_id, here("data/model_features/mesopelagiczones/mesopelagic
 Flanders Marine Institute. Global Oceans and Seas, version 1. (2021). https://www.marineregions.org/. https://doi.org/10.14284/542. Accessed 27 July 2025.
 
 Download from: https://doi.org/10.14284/542
-
 
 ```{r}
 
@@ -409,6 +404,8 @@ write.csv(ocean_lookup_fin, here("data/model_features/ocean/ocean_fixed.csv"), r
 
 
 Distance to seamount data 
+ 
+ - [Yesson et al. 2020](https://doi.pangaea.de/10.1594/PANGAEA.921688)
 
 ```{r}
 library(nngeo)
@@ -466,7 +463,9 @@ global_grid = data_grid
 ```
 
 
-Make sure days at sea csv is same resolution/projection as ours: https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/ConversionFishingHours.csv
+Make sure days at sea csv from Rousseau et al. is same resolution/projection as ours: https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/ConversionFishingHours.csv
+
+ - we will use this to convert days at sea to hours, after modeling the number of vessels in each cell. 
 
 ```{r}
 

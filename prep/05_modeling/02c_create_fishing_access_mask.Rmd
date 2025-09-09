@@ -6,7 +6,7 @@ date: "2024-12-11"
 
 # Summary
 
-Here we create a dataset that described for each flag country, the EEZs they are able to fish in for each year. For artisanal data, we assume that countries can only fish in their EEZ
+Here we create a dataset that described for each flag country, the EEZs they are able to fish in for each year. For artisanal data, we assume that countries can only fish in their EEZ, so this might be redundant.
 
 The data will be formatted as year \| flag country \| eez (including high seas?) \| fishing (1 or 0)
 
@@ -21,8 +21,6 @@ library(qs)
 
 source(here("R/dir.R"))
 ```
-
-Try with catch data instead?
 
 ```{r}
 hist_fish_data <- qs::qread(here("data/model_features/rousseau_total_art_vessels.qs"))

@@ -15,6 +15,11 @@ editor_options:
 
 Download ERDDAP sea surface temperature and chlorophyll data
 
+    - Chlorophyll-A concentration (mean, sd) in mg/m³ (Present: [Aqua MODIS Chl-a 4km monthly](https://coastwatch.pfeg.noaa.gov/erddap/griddap/erdMH1chlamday.html))
+    
+    -   Sea surface temperature (mean, sd) in °C (Present: [NOAA 0.25-deg Daily OI SST V2.1](https://coastwatch.pfeg.noaa.gov/erddap/info/ncdcOisst21Agg_LonPM180/index.html))
+    
+    
 ```{r echo = FALSE}
 # This chunk sets up default settings for all chunks below
 knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,fig.width = 7.5,fig.height = 5,dev = 'png',dpi=300)
@@ -98,7 +103,7 @@ missing_dates <- determine_missing_dates(dataset_name = "ncdcOisst21Agg_LonPM180
 missing_dates_2 <- missing_dates[[1]]$date
 ```
 
-Unfortunately, this SST data does not appear to be available to download through rerrdap as of July 9, 2025 (thanks Trump...). Here is code I will run to update the data for the remaining years we need to download (just 2024): https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-interpolation/v2.1/access/avhrr/
+Unfortunately, this SST data does not appear to be available to download through rerrdap as of July 9, 2025. Here is code I will run to update the data for the remaining years we need to download (just 2024): https://www.ncei.noaa.gov/data/sea-surface-temperature-optimum-interpolation/v2.1/access/avhrr/
 
 First, download the data:
 

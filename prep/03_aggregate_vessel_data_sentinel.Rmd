@@ -1,8 +1,11 @@
 ---
-title: "Aggregate vessel data and calculate proportions"
+title: "Aggregate vessel data and calculate proportions Sentinel"
 output: html_document
 date: "2025-07-22"
 ---
+
+## Summary
+Here we aggregate the Sentinel-2 data to 0.5 by 0.5 degree, matching our analysis grid
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -50,7 +53,7 @@ rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c
   clean_names()
 ```
 
-Categorize vessel lengths in the raw detection data
+Categorize vessel lengths in the raw detection data to match those contained in Rousseau et al. 
 
 ```{r}
 vessels_length_fix <- vessels_raw %>% 
@@ -71,7 +74,7 @@ colnames(vessels_length_fix)
 ```
 
 
-Aggregate and save data to 0.5 and 1 degree
+Aggregate and save data to 0.5 degree
 
 ```{r}
 
@@ -99,29 +102,11 @@ vessels_grouped_aggregated_5 <- vessels_length_fix %>%
 
 
 
-# # Aggregate from 0.1 to 0.5 degree cells
-# vessels_grouped_aggregated_1 <- vessels_length_fix %>%
-#   # Round coordinates to nearest 1 degree
-#   mutate(
-#     x_1 = round(lon),
-#     y_1 = round(lat)
-#   ) %>%
-#   # Group by rounded coordinates and existing grouping variables
-#   group_by(x_1, y_1, year, length_category) %>%
-#   # Aggregate numeric columns
-#   summarise(
-#     nv = sum(nv) # Sum the vessel counts
-#   ) %>%
-#   ungroup() %>%
-#   # Rename coordinates back to original names if needed
-#   rename(x = x_1, y = y_1) 
-
-
 ```
 
 Figure out the flag country of each detection. We are assuming that the EEZ the vessel is fishing in is its flag country. 
 
-         - “We make the reasonable assumption that the small-scale fishing sub-sector only operates within domestic waters (i.e., in their nation’s EEZ, <200 NM from shore). There are a few exceptions to this assumption, however, the total value of fish caught by this sub-sector in non-domestic waters is negligible [32].” https://www.sciencedirect.com/science/article/pii/S0308597X23001380 
+     > “We make the reasonable assumption that the small-scale fishing sub-sector only operates within domestic waters (i.e., in their nation’s EEZ, <200 NM from shore). There are a few exceptions to this assumption, however, the total value of fish caught by this sub-sector in non-domestic waters is negligible [32].” https://www.sciencedirect.com/science/article/pii/S0308597X23001380 
          
          
 ```{r}
@@ -132,10 +117,11 @@ vessels_agg_5_eez <- vessels_grouped_aggregated_5 %>%
 test <- vessels_agg_5_eez %>%
   filter(is.na(pixel_id)) # 2000 missing.. what happened? These are all being classified as land. So we should assign them to the next closest cell that is non NA pixel id instead?
 
-mapview::mapview(test, xcol = "x", ycol = "y")
+mapview::mapview(test, xcol = "x", ycol = "y") # yes. 
 
 ## we need to assign the values in the NA cells to the closest non-NA pixel id cell, we'll do this using nearest neighbor search:
 library(FNN) # For nearest neighbor search
+
 # 1. Separate rows with and without pixel_id
 missing_pixel <- vessels_agg_5_eez %>% filter(is.na(pixel_id))
 with_pixel <- vessels_agg_5_eez %>% filter(!is.na(pixel_id))
@@ -169,7 +155,7 @@ vessels_agg_5_eez_filled <- bind_rows(with_pixel, missing_pixel) %>%
   summarise(nv = sum(nv, na.rm = TRUE)) %>%
   ungroup() # makes sense
 
-# read in EEZ data 
+# read in EEZ data and join
 eez_lookup <- read.csv(here("data/model_features/eez/eez_lookup_fix.csv"))
 eez_df <- read.csv(here("data/model_features/eez/eez_fix.csv")) %>%
   left_join(eez_lookup)
@@ -198,9 +184,10 @@ test <- vessel_agg_5_flag %>%
 vessel_agg_5_flag_fix <- vessel_agg_5_flag %>%
   filter(pixel_id != 120609) %>%
   rbind(test)
+
 ```
 
-Now calculate the proportion of each flag country's vessels are in each cell for each year and length category
+Now calculate the proportion of each flag country's vessels that are in each cell for each year and length category
 
 ```{r}
 vessel_agg_5_props <- vessel_agg_5_flag_fix %>%

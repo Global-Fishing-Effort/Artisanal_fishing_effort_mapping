@@ -1,8 +1,12 @@
 ---
-title: "Calculate vessel lengths, centroids, and years"
+title: "Prepare satelitte imagery data from Skylight"
 output: html_document
 date: "2025-05-29"
 ---
+
+## Summary
+Here we prep data Skylight satellite imagery vessel detections  to use in our models. The first script `00_unzip_raw_data` unzips the data which we read in here. 
+
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -20,6 +24,8 @@ library(qs)
 source(here("R/dir.R"))
 ```
 
+Read in data 
+
 ```{r}
 vessels_batch1 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/vessel.csv"))
 vessels_batch2 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_2/vessel.csv"))
@@ -31,8 +37,7 @@ colnames(vessels_batch3)
 
 ```
 
-
-Lets rasterize vessel detections
+First we need to calculate the centroid of the vessel detections, as only corners are provided. This will allow us to rasterize the data later on. We also calculate the vessel lengths from the corners provided in the data. 
 
 ```{r}
 # Function to calculate centroid from 4 WGS84 corners
@@ -69,7 +74,7 @@ vessels_batch_df <- vessels_batch1 %>%
   ungroup() %>%
   select(-centroid) 
 
-qs::qsave(vessels_batch_df, here("data/vessels/all_batch_centroids.qs"))
+qs::qsave(vessels_batch_df, here("data/vessels/all_batch_centroids.qs")) # save centroids
 
 vessels_batch_df <- qs::qread(here("data/vessels/all_batch_centroids.qs"))
 
@@ -83,7 +88,7 @@ compute_vessel_length <- function(x1, y1, x2, y2, x3, y3, x4, y4) {
                       x4, y4), ncol = 2, byrow = TRUE)
   
   # Compute all pairwise geodesic distances
-  dists <- distm(corners, fun = distGeo)
+  dists <- distm(corners, fun = distGeo) # calulates the distance between the corners
   
   # Return maximum distance in meters
   return(max(dists))
@@ -104,13 +109,13 @@ colnames(vessels_batch_df)
   ungroup()
 
   
-## add date information 
+## Now lets add date information so that we can summarize per year eventually 
   
 images_batch1 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/image.csv")) %>%
     mutate(land_sq_km = NA,
          water_sq_km = NA)
 images_batch2 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_2/image.csv")) 
-images_batch3 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_3/image.csv")) # 2009-2021!?
+images_batch3 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_3/image.csv")) # 2009-2021
 
 all_images <- images_batch3 %>%
   mutate(batch = 3) %>%
@@ -128,7 +133,7 @@ vessels_final <- vessel_lengths %>%
   left_join(all_images, by = c("fname", "batch"))
   
 
-qs::qsave(vessels_final, here("data/vessels/all_batch_lengths_year.qs"))
+qs::qsave(vessels_final, here("data/vessels/all_batch_lengths_year.qs")) # save final data
 
 ```
 
@@ -204,102 +209,8 @@ How to determine flag country?
 Vessel IDs:
  - Are they unique across the batches? For example, is vessel id 0 the same in batch 1 as in batch 3? 
    - "The idx column in vessel.csv is not unique between files. They use a combination of fname column and idx column for naming the vessel crops so that it is unique, but that assumes your filenames are unique. Across the three batches, the filename and idx combined should be unique, but this is not guaranteed since it is possible there are locations that are duplicated across the batches."
-   - Ok so they aren't unique across batches. Are they unique across images?? From their response it doesn't seem like it. "The idx column in vessel.csv is not unique between files". But then what do the idx tell us?? Are they only unique within the image pulls? Yes. 
+   - Ok so they aren't unique across batches. Are they unique across images?? From Skylight's response it doesn't seem like it. "The idx column in vessel.csv is not unique between files". But then what do the idx tell us?? Are they only unique within the image pulls? Yes. 
 
 
 
-Explore vessel IDs 
-
-```{r}
-images_batch1 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/image.csv")) %>%
-    mutate(land_sq_km = NA,
-         water_sq_km = NA)
-images_batch2 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_2/image.csv")) 
-images_batch3 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_3/image.csv")) # 2009-2021!?
-
-all_images <- images_batch3 %>%
-  mutate(batch = 3) %>%
-  rbind(., images_batch1 %>% mutate(batch = 1)) %>%
-    rbind(., images_batch2 %>% mutate(batch = 2)) %>%
-  filter(timestamp != "unknown") %>%
-  mutate(year = year(timestamp),
-         month = month(timestamp),
-         day = day(timestamp),
-         date = date(timestamp)) %>%
-  dplyr::distinct(fname, year, month, day, date, batch)
-
-# Are they unique within a day? We can look at image.csv to get the dates of the images and match to our vessel.csv
-
-test <- vessels_batch_df %>%
-  left_join(all_images) %>%
-  filter(year == 2013,
-         day == 03,
-         month == 03) %>%
-  filter(batch == 3) # if they were unique across days we would see idx increasing by 1 and they dont
-
-# not unique within a day it appears 
-
-# are they unique within an image? 
-
-test <- vessels_batch_df %>%
-  left_join(all_images) %>%
-  filter(batch == 2) %>%
-  group_by(fname) %>%
-  summarise(n())
-
-# 139.6572_35.377.tif has the most observations
-test <- vessels_batch_df %>%
-  left_join(all_images) %>%
-  filter(batch == 2) %>%
-  filter(fname == "67.148203972_24.799790757.tif")
-# doesn't appear to be unique within an image. If idx was then we would have all numbers from 0 to 4435 in this and it doesn't
-
-test2 <- rast("/home/ubuntu/data_storage/raw_data/minderoo_skylight/unzipped_3/vis/139.6572_35.377.tif") # ok so why doesn't this exist..? 
-
-  # 139.6572_35.377.tif has the most observations
-test <- vessels_batch_df %>%
-  left_join(all_images) %>%
-  filter(batch == 3) %>%
-  filter(fname == "139.6572_35.377.tif")
-# doesn't appear to be unique within an image. If idx was then we would have all numbers from 0 to 4435 in this and it doesn't
-
-  
-# so are they unique across images within the same batch? 
-
-
-# 1. Round centroid coordinates to any resolution you prefer
-cell_size <- 1 # You can change this to 1, 0.5, 0.01, 0.05, etc.
-
-vessel_batch_counts <- vessels_batch_df %>%
-  filter(idx == 0, 
-         batch == 1) %>%
-  mutate(
-    lon_bin = floor(centroid_lon / cell_size) * cell_size,
-    lat_bin = floor(centroid_lat / cell_size) * cell_size
-  ) %>%
-  group_by(lon_bin, lat_bin) %>%
-  summarise(vessel_count = n(), .groups = "drop")
-
-# 2. Convert to spatial object
-vessel_points <- st_as_sf(vessel_batch_counts, coords = c("lon_bin", "lat_bin"), crs = 4326)
-
-# 3. Rasterize to a SpatRaster
-# Create an empty raster that covers your area
-r_template <- rast(
-  extent = ext(min(vessel_batch_counts$lon_bin), max(vessel_batch_counts$lon_bin) + cell_size,
-               min(vessel_batch_counts$lat_bin), max(vessel_batch_counts$lat_bin) + cell_size),
-  resolution = cell_size,
-  crs = "EPSG:4326"
-)
-
-# Rasterize vessel count
-vessel_rast <- rasterize(vessel_points, r_template, field = "vessel_count", fun = "sum")
-
-vessel_rast
-
-plot(vessel_rast) # ok, so it seems like the vessel IDs are not unique ACROSS image files within a batch either. Just looking at idx == 0 and batch == 1 gives us cells all over the place, which probably doesn't make sense...
-
-## So how are they unique?! The original email from skylight/Jessica says taht within each image the idx is unique. But when we look at an individual image that doesn't appear to be the case?? 
-
-```
 

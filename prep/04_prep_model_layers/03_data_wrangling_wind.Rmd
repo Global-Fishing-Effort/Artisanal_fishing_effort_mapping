@@ -13,7 +13,9 @@ editor_options:
 
 # Summary 
 
-Download wind data 
+Data come from the [CCMP Wind Vector Analysis Product](https://www.remss.com/measurements/ccmp/). We use V3.1 for dates from 1993-2024. The raw data provide u- and v- vectors of wind speed. For each location, we combine these to create absolute windspeed using wind_speed_m_s = sqrt(uwnd^2 + vwnd^2).
+
+Data are downloaded from this [http server](https://data.remss.com/ccmp/).
 
 ```{r echo = FALSE}
 # This chunk sets up default settings for all chunks below
@@ -52,9 +54,6 @@ data_grid <- data.table::fread(here("data/model_features/global_grid.csv"))%>%
 
 # Download data
 
-Data come from the [CCMP Wind Vector Analysis Product](https://www.remss.com/measurements/ccmp/). We use V3.1 for dates from 1993-2024. The raw data provide u- and v- vectors of wind speed. For each location, we combine these to create absolute windspeed using wind_speed_m_s = sqrt(uwnd^2 + vwnd^2).
-
-Data are downloaded from this [http server](https://data.remss.com/ccmp/).
 
 ```{r eval = params$download_data}
 v31_dates <- tibble(date = seq(date("1993-01-01"),date("2024-12-31"),by="1 day")) %>%
@@ -315,7 +314,7 @@ qs::qsave(wind_data_imputed, here("data/model_features/wind_data.qs")) # only ~3
 ```
 
 
-# Spatially and temporally aggregated data to 1 by 1 degree cells
+# Spatially and temporally aggregated data to 1 by 1 degree cells if needed
 
 ## Defining our global grid
 

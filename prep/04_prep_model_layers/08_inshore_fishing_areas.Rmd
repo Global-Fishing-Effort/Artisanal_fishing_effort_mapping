@@ -21,8 +21,11 @@ from SAUP:
 
 
 
-Reference: 
-https://www.isimip.org/gettingstarted/input-data-bias-adjustment/details/124/ 
+Population layer reference: 
+Jan Volkholz, Stefan Lange, Inga Sauer, Christian Otto (2024): ISIMIP3b population input data (v1.2). ISIMIP Repository.  https://doi.org/10.48364/ISIMIP.889136.2
+
+
+Download URL: https://www.isimip.org/gettingstarted/input-data-bias-adjustment/details/124/ 
 
 1. Coastal land strip (inland only):
 Take land polygons and keep just the band within, say, 10 km inland of the shoreline. This avoids counting towns far inland.

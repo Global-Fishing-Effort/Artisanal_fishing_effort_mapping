@@ -13,7 +13,7 @@ editor_options:
 
 # Summary
 
-Prep country level data indices for modelling
+Prep some country level data indices for modelling
  - Pacific Decadal Oscillation index 
  - El Nino South Oscillation Index
  - World bank development regions
@@ -94,9 +94,7 @@ write.csv(wrangle_pdo_data, here("data/model_features/pdo_index.csv"), row.names
 ```
 
 El Nino South Oscillation Index
-Download from:https://psl.noaa.gov/data/correlation/oni.data
-
-N. Rayner et al., Global analyses of sea surface temperature, sea ice, and night marine air temperature since the late nineteenth century. J. Geophys. Res. Atmos. 108, 1–25 (2003).
+Download from: https://psl.noaa.gov/data/correlation/oni.data
 
 ```{r}
 # Pull and wrangle ENSO data from NOAA

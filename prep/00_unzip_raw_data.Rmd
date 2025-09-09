@@ -1,8 +1,12 @@
 ---
-title: "Unzip raw minderoo data"
+title: "Unzip raw Skylight/Minderoo data"
 output: html_document
 date: "2025-05-29"
 ---
+
+## Summary
+
+Here we unzip the raw data provided by Minderoo, from Skylight, to our data storage folder. 
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -16,22 +20,15 @@ source(here("R/dir.R"))
 ```
 
 ```{r}
-unzip(file.path(rdsi_raw_dir, "minderoo_skylight/2024-08-14-initial-1494-images.zip"), exdir = file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1"))
+unzip(file.path(rdsi_raw_dir, "minderoo_skylight/2024-08-14-initial-1494-images-updated20250617.zip"), exdir = file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1"))
 
-test <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/vessel.csv")) # no "is_in_water" column as jessica stated in email? I think we will need this as we will only want to indicate fishing effort if it is actually in the water, and not moored. 
+test <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/vessel.csv")) 
 
 # the wgs_84 coordinates are the corners of each vessel. I'm guessing for our purposes we could take the centroid of the corners and make them a point and rasterize? 
 test2 <- read.csv(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/image.csv")) # ok i dont think we really need these.
-# crops folder I think is each image cropped to where a vessel was detected. So each image is one vessel. The number at the end (e.g., "_32.jpg") represents the vessel index I believe. 
-# vis folder is each image with vessels in it with a color to where it is? 
+# crops folder is each image cropped to where a vessel was detected. So each image is one vessel. The number at the end (e.g., "_32.jpg") represents the vessel index I believe. 
 
-## jessica says "you can get the resolution from the geotiff file". The geotiff file I assume are the images in the "crops" folder? 
-# so for vessel index "3" we could figure out the resolution by reading in the files with "_3.jpg" in them and calculating the resolution of these? 100.1199411_2.657718.tif_3.jpg
-# can we read in a jpg file as a raster? 
-
-# what is the time frame of the images? 
-# could we attribute effort to vessel lengths based on Yannick data? 
-
+# what is the time frame of the images? 2009-2021
 
 unzip(file.path(rdsi_raw_dir, "minderoo_skylight/2024-10-07-group2-3167-images.zip"), exdir = file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_2")) # this file does not have vessel.csv or image.csv
 
@@ -72,19 +69,4 @@ test_days <- all_images %>%
   ungroup()
 # ranges from 1 to 57 images per timestamp (day)
 ```
-
-Need to remove all ".jpg" extensions and replace with .tif in unzipped_1(2 or 3)/crops
-
-find . -maxdepth 1 -type f -name "*.tif_*.jpg" -print0 | while IFS= read -r -d '' f; do
-  newname=$(echo "$f" | sed -E 's/\.tif_([0-9]+)\.jpg$/_\1.tif/')
-  echo "Renaming $f -> $newname"
-  mv "$f" "$newname"
-done
-
-```{r}
-test <- data.frame(fn = list.files(file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_2/crops"))) %>%
-  filter(str_detect(fn, "jpg")) # should be none...
-
-```
-
 

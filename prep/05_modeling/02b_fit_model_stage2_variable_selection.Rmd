@@ -1,12 +1,12 @@
 ---
-title: "Fit prediction model for fishing effort"
+title: "Fit prediction model for fishing vessels: stage 2"
 output: html_document
 date: "2024-12-11"
 ---
 
 # Summary 
 
-We use the data compiled in the previous scripts to fit a RF regression model to predict the proportion of fishing effort occurring in cells. 
+We use the data compiled in the previous scripts to fit a random forest regression model to predict the proportion of fishing vessels occurring in cells. 
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -133,8 +133,6 @@ env_grid <- env_data %>%
  
  NOTE: Lower RMSE is better
 
-NOTE: need to check on flags which have very little data. Some of the flags have only ~5 rows of data (flag == "SVN" for example only has 2 rows), so obviously the predictions for these would be horrible. Maybe we want to exclude these and gapfill with something later on? Maybe add a sample size filter? Check to see if these even ran for the classification. If they didn't, we probably won't include them anyways. 
-
 Save full models first 
 
 ```{r}
@@ -144,7 +142,6 @@ missing_flags <- setdiff(unique(hist_fish_data$flag_fin), unique(model_data$flag
 length(missing_flags) #  these are flags that are in the rousseau data but not in the skylight data, meaning we can't make predictions on them by flag models
 
 flags <- setdiff(flags, missing_flags) # missing 0
-
 
 stage_2_path <- file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_2_models/pruning")
 stage_2_files <- list.files(stage_2_path, full.names = TRUE)
@@ -170,7 +167,7 @@ model_data_flag <- model_data %>%
 
 if(flag == "HKG"){
   model_data_flag <- model_data_flag %>%
-    filter(eez_id != 8603) # Since CHN and HKG have the same cells, if we don't filter this out there will be duplicates
+    filter(eez_id != 8603) # Since CHN and HKG have the same cells, if we don't filter out CHN there will be duplicates
   
 }
 
@@ -178,7 +175,7 @@ if(nrow(model_data_flag) == 1){
   next()
 }
 
-# prop_fishing_hours_cell = the proportion of that flag country's fishing effort represented in that cell (per gear, length, and year groupings; see below)
+# prop_fishing_hours_cell = the proportion of that flag country's fishing vessels represented in that cell (per length and year groupings; see below)
 
 set.seed(123)
 samp <- sample(nrow(model_data_flag), 0.6 * nrow(model_data_flag))  # do 60/40 split since this data is mostly small

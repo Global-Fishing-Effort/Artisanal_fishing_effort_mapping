@@ -1,5 +1,5 @@
 ---
-title: "Prep gfw fishing effort to feed to model for 0.5 degree"
+title: "Prep fishing vessel data to feed to model for 0.5 degree"
 output: html_document
 date: "2025-07-23"
 ---
@@ -21,6 +21,8 @@ source(here("R/dir.R"))
 grid <- read.csv(here("data/model_features/global_grid.csv"))
 
 ```
+
+Read in the vessel detection data and combine/summarise per flag country, length, and year. 
 
 ```{r}
 
@@ -57,7 +59,7 @@ saveRDS(year_data, here("data/model_features/prepared_data_0.5_all_skylight_sent
 ```
 
 Also prep the Rousseau data for eventual predictions
-We need to prep Rousseau data by calculating average gross tonnage and Days at sea per flag and length combinations. Using these metrics with the number of vessels, we can calculate effort. 
+We need to prep Rousseau data by calculating average gross tonnage and days at sea per flag and length combinations. Using these metrics with the number of vessels, we can calculate effort once we make predictions.
 
 ```{r}
 rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FishingCountry_LengthBoat_Gear_Sector.csv") %>%

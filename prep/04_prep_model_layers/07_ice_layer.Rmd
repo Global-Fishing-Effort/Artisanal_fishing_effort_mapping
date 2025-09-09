@@ -49,7 +49,7 @@ Xiao Liu, Charles Stock, John Dunne, Minjin Lee, Elena Shevliakova, Sergey Malys
 
 
 
-New methods, derived from relationships described in Kawaguchi & Press 2009 (https://onlinelibrary.wiley.com/doi/full/10.1111/j.1365-2400.2009.00686.x?saml_referrer#b5) and Hewitt 1997 (https://www.ccamlr.org/es/system/files/science_journal_papers/05hewitt.pdf)
+Methods, derived from relationships described in Kawaguchi & Press 2009 (https://onlinelibrary.wiley.com/doi/full/10.1111/j.1365-2400.2009.00686.x?saml_referrer#b5) and Hewitt 1997 (https://www.ccamlr.org/es/system/files/science_journal_papers/05hewitt.pdf)
 
 
 To constrain fishing effort allocation in regions with extensive seasonal ice cover, we derived a quantitative relationship between the number of months a location is ice-covered and the expected number of fishing months, using the empirical results of Kawaguchi & Press (2009) and the sea ice index methodology of Hewitt (1997).
@@ -115,7 +115,6 @@ time(sic) <- dates
 # ---- (1) Monthly ICE (1 if >=0.15), at native 15'
 ice_bin <- app(sic, fun = function(x) as.integer(x >= 0.15))
 
-library(tidyterra)
 # ---- (2) Aggregate to 0.5° (15' -> 0.5° is fact=2)
 #      Use mean to get fraction iced in each coarse cell-month, then threshold by tau.
 tau <- 0.5                      # share of subcells iced to count the coarse cell as iced (sensitivity: 0.25–0.75)

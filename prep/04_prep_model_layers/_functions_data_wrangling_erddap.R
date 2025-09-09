@@ -1,3 +1,7 @@
+## NOTE: This code was adapted from McDonald et al. 2024:
+## Global expansion of marine protected areas and the redistribution of fishing effort: 
+## https://www.pnas.org/doi/abs/10.1073/pnas.2400592121
+
 # Function to make grid that covers an arbitrary shape, locked to closest pixel edges
 make_grid_custom <- function(starting_shape,pixel_size){
   # Take bounding box of starting shape, and expand it out to lock to the closest pixel edges

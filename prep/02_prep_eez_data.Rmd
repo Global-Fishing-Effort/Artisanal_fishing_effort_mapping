@@ -1,8 +1,16 @@
 ---
-title: "Determine flag and EEZ of vessels"
+title: "Determine EEZ of vessels"
 output: html_document
 date: "2025-07-22"
 ---
+
+## Summary
+
+In this script, we prep EEZ data and match that to the vessel detection data. 
+
+The vessel detection data only includes the lat/lon points, and does not specify which EEZ each point is in. We will use EEZ data from ([Marine Regions V11](https://www.vliz.be/en/imis?dasid=6316&doiid=386)), and match that EEZ data to the vessel detection data. For the EEZ regions, we will use flag countries represented in the data from Rousseau et al. 2019. We match to flag countries in this data because 1) the Rousseau data is the effort data we are allocating, and 2) we are assuming for these models that where a vessel is detected is the vessel's flag country. This assumption is made because we are modeling artisanal fisheries, and we assume artisanal fisheries can only fish within their EEZ (in line with SAUP, Rousseau, and Watson data, Skerritt et al. 2023).
+
+  > “We make the reasonable assumption that the small-scale fishing sub-sector only operates within domestic waters (i.e., in their nation’s EEZ, <200 NM from shore). There are a few exceptions to this assumption, however, the total value of fish caught by this sub-sector in non-domestic waters is negligible [32].” https://www.sciencedirect.com/science/article/pii/S0308597X23001380 
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -20,7 +28,7 @@ library(janitor)
 source(here("R/dir.R"))
 ```
 
-Read in raw Rousseau country level data
+Read in raw Rousseau country level data and filter for artisanal fisheries
 
 ```{r}
 # codes used in rousseau et al
@@ -40,7 +48,7 @@ rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c
 
 ```
 
-Read in raw EEZ data 
+Read in raw EEZ data from Marine Regions. You will need to download this to your large file storage first: https://www.vliz.be/en/imis?dasid=6316&doiid=386
 
 ```{r}
 analysis_projection <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
@@ -49,7 +57,6 @@ eez_raw <- st_read(file.path(rdsi_raw_dir, "marine_regions/World_EEZ_v12_2023102
 ```
 
 Establish a 0.5 by 0.5 data grid
-
 
 ```{r eval = params$download_data}
 # Function to make grid that covers an arbitrary shape, locked to closest pixel edges
@@ -99,7 +106,7 @@ data_grid %>%
             lat = min(lat))%>%
   ungroup()  %>%
   as_tibble() %>%
-  write_csv(here::here("data/model_features/global_grid.csv"))
+  write_csv(here::here("data/model_features/global_grid.csv")) # we save this "global_grid" as our analysis grid
 
 data_grid <- data.table::fread(here::here("data/model_features/global_grid.csv")) %>%
   st_as_sf(wkt = "geometry_wkt",
@@ -109,23 +116,22 @@ data_grid <- data.table::fread(here::here("data/model_features/global_grid.csv")
 
 ```
 
-Check to see if the eez data we prepped for the industrial model has all of the EEZs we need in Rousseau artisanal data, and if not fill in. 
+Take the EEZ data from above and extract to our grid, saving a column for the eez country. 
 
-We also need to exclude any uninhabited areas, taken from OHI: https://github.com/OHI-Science/ohiprep_v2025/blob/2a0ba2f1f25cc4e2331ffcc67f3006d3988c50ba/globalprep/spatial/v2017/output/rgn_uninhabited_islands.csv
-
+We will also exclude any uninhabited areas, as defined by the Ocean Health Index (OHI): https://github.com/OHI-Science/ohiprep_v2025/blob/2a0ba2f1f25cc4e2331ffcc67f3006d3988c50ba/globalprep/spatial/v2017/output/rgn_uninhabited_islands.csv
 
 ```{r}
 rousseau_eezs <- unique(rousseau_eff$flag_fin) #164
 
 eez_test <- eez_raw %>%
-  st_drop_geometry()
+  st_drop_geometry() # just take a look at what columns there are
 
 # test <- eez_raw %>%
 #   filter(MRGID_TER1 == 8641)
 # 
 # mapview(test)
 
-## need to filter out
+## need to filter out these places because they are uninhabited, and thus won't have artisnal fisheries
 # Macquarie Island, MRGID == 8311
 # Wake Island, MRGID == 8319
 # Glorioso Islands, MRGID == 48945
@@ -154,11 +160,11 @@ eez_lookup_ids <- eez_raw %>%
         filter(eez_sovereign != "ATA")  %>% 
   add_row(eez_sovereign = "High seas", eez_id = 99999)
 
-sort(setdiff(rousseau_eezs, eez_lookup_ids$eez_sovereign)) # [1] "BMU" "COK" "CUW" "FRO" "GLP" "GRL" "GUF" "GUM" "HKG" "MYT" "NCL" "NIU" "PRI" "PYF" "RAA" "RAM" "REU" "TWN" "UKR" "WLF"; # missing these 
+sort(setdiff(rousseau_eezs, eez_lookup_ids$eez_sovereign)) # [1] "BMU" "COK" "CUW" "FRO" "GLP" "GRL" "GUF" "GUM" "HKG" "MYT" "NCL" "NIU" "PRI" "PYF" "RAA" "RAM" "REU" "TWN" "UKR" "WLF"; # missing these because they are all some overlapping claims
 
 # Bermuda, Cook Islands, Curacao, Faroe Islands, Guadeloupe, Greenland, French Guiana, Guam, Hong Kong, Mayotte, New Caledonia, Niue, Puerto Rico, French Polynesia, Azores, Madeira, Reunion, Taiwan, Ukraine, Wallis and Futuna
 
-# ok I think we will need to go one by one...
+# Filter for those places and add back into the EEZ data we will extract to our grid 
 
 eez_terr_fix <- eez_raw %>%
   st_drop_geometry() %>%
@@ -178,8 +184,9 @@ eez_lookup_fix <- eez_lookup_ids %>%
 
 sort(setdiff(rousseau_eezs, eez_lookup_fix$eez_sovereign))  # just hong kong, good
 
-write.csv(eez_lookup_fix, here("data/model_features/eez/eez_lookup.csv"), row.names = FALSE)
+write.csv(eez_lookup_fix, here("data/model_features/eez/eez_lookup.csv"), row.names = FALSE) # now save a lookup
 
+# filter for sovereign nations as above
   eez_sovereign_nations <- eez_raw %>%
       filter(!(MRGID %in% c(8311, 8319, 48945, 8339, 8340, 8341, 48946, 8383, 8384, 8385, 8386, 8387, 8388, 8401, 48975, 8437, 8442, 8443, 8451, 8452))) %>%
     filter(POL_TYPE !=  "Overlapping claim") %>%
@@ -188,7 +195,7 @@ write.csv(eez_lookup_fix, here("data/model_features/eez/eez_lookup.csv"), row.na
     # Don't include Antarctica - classify it as high seas instead
     filter(eez_sovereign != "ATA")  
   
-
+# filter for territories or overlapping claims 
     eez_territory <- eez_raw %>%
             filter(!(MRGID %in% c(8311, 8319, 48945, 8339, 8340, 8341, 48946, 8383, 8384, 8385, 8386, 8387, 8388, 8401, 48975, 8437, 8442, 8443, 8451, 8452))) %>%
   filter(ISO_TER1 %in% c("BMU", "COK", "CUW", "FRO", "GLP", "GRL", "GUF", "GUM", "MYT", "NCL", "NIU", "PRI", "PYF", "REU", "TWN", "UKR", "WLF") | MRGID_TER1 %in% c(8636, 8672, 19143, 3297, 8654, 2260, 8683, 8599, 8606, 2261, 8673, 8641, 8656, 2454, 4956, 8609, 2177, 2196, 8680)) %>%
@@ -203,6 +210,7 @@ write.csv(eez_lookup_fix, here("data/model_features/eez/eez_lookup.csv"), row.na
   mutate(eez_id = as.numeric(eez_id)) %>%
   dplyr::select(eez_sovereign) 
 
+    # now bind together
 eez_all <- rbind(eez_sovereign_nations, eez_territory) %>% 
     sf::st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>%
     sf::st_transform(analysis_projection) %>%
@@ -210,7 +218,7 @@ eez_all <- rbind(eez_sovereign_nations, eez_territory) %>%
     mutate(eez_area_m2 = sf::st_area(geometry)%>%
              units::drop_units())
 
-sort(setdiff(rousseau_eezs, eez_all$eez_sovereign))  # just hong kong, good
+sort(setdiff(rousseau_eezs, eez_all$eez_sovereign))  # just hong kong, good, as this is not included in the EEZ data
 
 
 ```
@@ -226,13 +234,12 @@ Now we will match to our data grid and extract a dataframe that is x,y, eez_id
   save_data_grid_eez <- data_grid_eez %>%
     st_drop_geometry()
   
-  qs::qsave(save_data_grid_eez, here("data/model_features/eez/int/eez_intersection.qs")) # save as we go
+  qs::qsave(save_data_grid_eez, here("data/model_features/eez/int/eez_intersection.qs")) # save as we go just in case, since this takes so long to run...
   
   data_grid_eez_2 <- data_grid_eez %>% 
       mutate(geometry_wkt = sf::st_make_valid(geometry_wkt)) %>%
     mutate(area_eez_overlap_m2 = sf::st_area(geometry_wkt)%>%
              units::drop_units())
-  
   
   data_grid_eez_3 <- data_grid_eez_2 %>%
     left_join(data_grid %>% st_drop_geometry()) %>%
@@ -246,9 +253,6 @@ Now we will match to our data grid and extract a dataframe that is x,y, eez_id
     ungroup() %>%
     dplyr::select(pixel_id,eez_sovereign,fraction_eez_overlap)
   
-  
-   # data_grid_eez_3 <-  qs::qread(here("data/model_features/eez/int/eez_intersection_no_highseas.qs")) %>%
-   #   dplyr::select(-fraction_eez_overlap)
 
      qs::qsave(data_grid_eez_3, here("data/model_features/eez/int/eez_intersection_no_highseas.qs"))
 
@@ -261,16 +265,14 @@ Now we will match to our data grid and extract a dataframe that is x,y, eez_id
    
   data_grid_eez_3_missing <- data_grid_eez_2_fix %>%
     left_join(data_grid %>% st_drop_geometry()) %>%
-    filter(eez_sovereign %in% c("SGP", "SVN", "JOR")) %>%
+    filter(eez_sovereign %in% c("SGP", "SVN", "JOR")) %>% # need to fix these, since they were incorrectly assigned for some reason
     dplyr::select(pixel_id,eez_sovereign)
-  
-  test <- data_grid_eez_3 %>%
-    st_drop_geometry()
+
   
   data_grid_eez_3_fin <- data_grid_eez_3 %>%
     dplyr::select(-fraction_eez_overlap) %>%
       rbind(., data_grid_eez_3_missing) %>%
-      filter(!(pixel_id == 96964 & eez_sovereign == "IDN")) %>%
+      filter(!(pixel_id == 96964 & eez_sovereign == "IDN")) %>% # re-assign these regions to be correct
       filter(!(pixel_id == 96965 & eez_sovereign == "IDN")) %>%
       filter(!(pixel_id == 139995 & eez_sovereign == "HRV")) %>%
       filter(!(pixel_id == 140361 & eez_sovereign == "ITA")) %>%
@@ -286,7 +288,7 @@ Now we will match to our data grid and extract a dataframe that is x,y, eez_id
     full_join(data_grid %>% st_drop_geometry()) %>%
     mutate(eez_sovereign = ifelse(is.na(eez_sovereign), "High seas", eez_sovereign)) %>%
         left_join(eez_lookup, by = c("eez_sovereign")) %>%
-    dplyr::distinct(pixel_id, eez_id)
+    dplyr::distinct(pixel_id, eez_id) # now join to our grid and lookup table to get iso3c
 
  test <- data_grid_high_seas %>%
    left_join(data_grid) %>%
@@ -295,7 +297,7 @@ Now we will match to our data grid and extract a dataframe that is x,y, eez_id
  rast(., type = "xyz")
  plot(test) # looks good.
 
- missing <- setdiff(unique(eez_lookup$eez_id), unique(data_grid_high_seas$eez_id))
+ missing <- setdiff(unique(eez_lookup$eez_id), unique(data_grid_high_seas$eez_id)) # see what is missing
  
  test <- eez_lookup %>%
    filter(eez_id %in% missing) # these countries arent in the fishing data anyways.
@@ -305,14 +307,13 @@ Now we will match to our data grid and extract a dataframe that is x,y, eez_id
    
       missing_2 <- setdiff(rousseau_eezs, unique(test$eez_sovereign)) # [1] HKG - ok after fix only missing Hong Kong. Before fix we were missing SVN, SGP, and JOR
 
-  
-  write.csv(data_grid_high_seas, here("data/model_features/eez/eez.csv"), row.names = FALSE)
+  write.csv(data_grid_high_seas, here("data/model_features/eez/eez.csv"), row.names = FALSE) # save
 
   check <-   read.csv(here("data/model_features/eez/eez.csv"))
 
 ```
 
-See if we can add HKG to the data, using the EEZ data from Rousseau et al 2024: https://github.com/Global-Fishing-Effort/RousseauEtAl2023/blob/main/Data/Cells_LatLon_EEZ.csv
+See if we can add HKG to the data, using the EEZ data from Rousseau et al 2024 (it will only be 1 pixel anyways, I believe): https://github.com/Global-Fishing-Effort/RousseauEtAl2023/blob/main/Data/Cells_LatLon_EEZ.csv
 
 ```{r}
 data_grid <- data_grid %>% st_drop_geometry()
@@ -321,11 +322,11 @@ data_grid_rast <- data_grid %>%
   dplyr::select(lon, lat, pixel_id) %>%
   rast(., type = "xyz")
 
-eez_data <- read.csv(here("data/model_features/eez/eez.csv"))
+eez_data <- read.csv(here("data/model_features/eez/eez.csv")) # read in our eez data created above
 
 eez_lookup <- read.csv(here("data/model_features/eez/eez_lookup.csv"))
 
-
+# read in eez data from Rousseau
 eez_rousseau_raw <- read.csv("https://raw.githubusercontent.com/Global-Fishing-Effort/RousseauEtAl2023/refs/heads/main/Data/Cells_LatLon_EEZ.csv") %>%
     clean_names()
 
@@ -333,13 +334,13 @@ test <- eez_rousseau_raw %>%
   distinct(c_number, fa_oname)
 
 eez_rousseau_hkg <- eez_rousseau_raw %>%
-    filter(fa_oname %in% c("Hong Kong", "Mexico")) %>% # pick 2 countries bc making a rast out of just hkg won't work
+    filter(fa_oname %in% c("Hong Kong", "Mexico")) %>% # pick 2 countries because making a rast out of just 1 pixel (HKG) won't work
   dplyr::select(lon, lat, c_number) %>%
   rast(., type = "xyz") %>%
   terra::resample(., data_grid_rast, method = "bilinear") %>%
   as.data.frame(., xy = TRUE) %>%
   left_join(test) %>%
-  filter(fa_oname == "Hong Kong") %>%
+  filter(fa_oname == "Hong Kong") %>% # now filter for only HKG after extracting from our grid
   rename(lon = x, lat = y, eez_id = c_number) %>%
   left_join(data_grid) %>%
   filter(!is.na(pixel_id)) %>%
@@ -348,7 +349,7 @@ eez_rousseau_hkg <- eez_rousseau_raw %>%
 eez_lookup_fix <- eez_lookup %>%
   add_row(eez_sovereign = "HKG", eez_id = 344)
 
-write.csv(eez_lookup_fix, here("data/model_features/eez/eez_lookup_fix.csv"), row.names = FALSE)
+write.csv(eez_lookup_fix, here("data/model_features/eez/eez_lookup_fix.csv"), row.names = FALSE) # re-save eez files
 
 eez_data_fix <- eez_data %>% 
   rbind(eez_rousseau_hkg)
