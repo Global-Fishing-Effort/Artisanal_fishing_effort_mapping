@@ -16,6 +16,7 @@ library(tidyverse)
 library(terra)
 library(tidyterra)
 library(glue)
+library(here)
 source(here("R/dir.R"))
 
 data_directory <- rdsi_raw_dir
@@ -49,10 +50,10 @@ Xiao Liu, Charles Stock, John Dunne, Minjin Lee, Elena Shevliakova, Sergey Malys
 
 
 
-Methods, derived from relationships described in Kawaguchi & Press 2009 (https://onlinelibrary.wiley.com/doi/full/10.1111/j.1365-2400.2009.00686.x?saml_referrer#b5) and Hewitt 1997 (https://www.ccamlr.org/es/system/files/science_journal_papers/05hewitt.pdf)
+Methods, derived from relationships described in Kawaguchi et al. 2009 (https://onlinelibrary.wiley.com/doi/full/10.1111/j.1365-2400.2009.00686.x?saml_referrer#b5) and Hewitt 1997 (https://www.ccamlr.org/es/system/files/science_journal_papers/05hewitt.pdf)
 
 
-To constrain fishing effort allocation in regions with extensive seasonal ice cover, we derived a quantitative relationship between the number of months a location is ice-covered and the expected number of fishing months, using the empirical results of Kawaguchi & Press (2009) and the sea ice index methodology of Hewitt (1997).
+To constrain fishing effort allocation in regions with extensive seasonal ice cover, we derived a quantitative relationship between the number of months a location is ice-covered and the expected number of fishing months, using the empirical results of Kawaguchi et al (2009) and the sea ice index methodology of Hewitt (1997).
 
 ### 1. Source relationship from literature
 Kawaguchi & Press (2009) examined the relationship between the number of months operated by the Antarctic krill fishery and the annual sea ice cover index (Hewitt, 1997) for several sub-Antarctic regions. For the South Shetland Islands and South Orkney Islands combined—both subject to seasonal ice cover—the best-fit linear regression was:
@@ -68,7 +69,7 @@ Following Hewitt (1997), `I` is calculated by:
 Units of `I` are therefore million km²·months.
 
 ### 3. Normalizing to per-cell ice months
-The regression slope in Murphy et al. (2009) is per unit `I` for the whole 1.25 × *10^6* km² region. To apply this relationship at the scale of an individual grid cell (e.g., 0.5°), we normalized `I` by the region’s area to express the relationship in terms of the **average number of iced months per location in the region**:
+The regression slope in Kawaguchi et al.  is per unit `I` for the whole 1.25 × *10^6* km² region. To apply this relationship at the scale of an individual grid cell (e.g., 0.5°), we normalized `I` by the region’s area to express the relationship in terms of the **average number of iced months per location in the region**:
 
 J = I / A_reg
 
@@ -95,7 +96,7 @@ Thus, in the normalized per-cell form, a location experiencing ≥9.2 months per
 ### 6. Assumptions and limitations
 - Relationship derived for the krill trawl fleet in the South Shetland and South Orkney Islands; applied here as a proxy for general accessibility constraints in seasonally ice-covered regions.
 - Assumes a linear relationship between iced months and fishing months.
-- Uses the same 15% ice concentration threshold as Hewitt (1997) and Kawaguchi & Press (2009) for consistency.
+- Uses the same 15% ice concentration threshold as Hewitt (1997) and Kawaguchi (2009) for consistency.
 
 ```{r}
 sic <- rast(file.path(data_directory, "ISIMIP/seaice/gfdl-mom6-cobalt2_obsclim_siconc_15arcmin_global_monthly_1961_2010.nc")) / 100
@@ -154,7 +155,7 @@ N_ice_star <- intercept / beta_J
 N_ice_star
 # [1] 9.236...
 
-hard_exclude <- N_ice >= 9  # derived cutoff (≈9.2), use 9 for an integer threshold
+hard_exclude <- N_ice >= 9  # derived cutoff (≈9.2), use 9 for an integer threshold 
 
 
 # ---- (5) (Optional) bring to your modeling grid
@@ -219,5 +220,37 @@ sea_ice_features_fin <- sea_ice_features %>%
 
 # Save
 qs::qsave(sea_ice_features_fin, here("data/model_features/sea_ice_features_lit.qs"))
+```
+
+```{r}
+test <- qs::qread(here("data/model_features/sea_ice_features_lit.qs"))
+
+test_rast <- test %>%
+  filter(year == 1950) %>%
+  dplyr::select(lon, lat, n_months_ice) 
+
+plot(test_rast)
+
+# Convert raster to dataframe for ggplot
+# test_df <- as.data.frame(test_rast, xy = TRUE, na.rm = TRUE)
+
+library(viridis)
+
+# Plot
+ggplot(test_rast) +
+  geom_raster(aes(x = lon, y = lat, fill = n_months_ice)) +
+  scale_fill_viridis(name = "", option = "C", na.value = "grey90") +
+  coord_equal() +
+  labs(
+    x = "Months with ice coverage",
+    y = ""
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text = element_text(size = 10),
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold")
+  )
 ```
 

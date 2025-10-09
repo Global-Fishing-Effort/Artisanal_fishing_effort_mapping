@@ -14,7 +14,7 @@ editor_options:
 # Summary
 
 Prep spatial measures we use to inform our model at 0.5 degree resolution
- - distance to short, port
+ - distance to shore, port
  - bathymetry (depth)
  - FAO regions
  - mesopelagic regions

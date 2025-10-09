@@ -300,22 +300,6 @@ stage_1_preds_rescale <- stage1_preds %>%
 
 # “We prefer to err on the side of inclusion within a flag’s EEZ.”
 
-# stage_1_preds_rescale <- stage1_preds %>%
-#   group_by(flag_fin, length_category) %>%
-#   mutate(max_pred = max(pred_presence, na.rm = TRUE)) %>%
-#   ungroup() %>%
-#   left_join(eez_lookup) %>%
-#   mutate(pred_presence_rescale = case_when( # adding this so that we will have predictions even if the maximum prob is < 0.5, but only assigning 1 in these cases when the flag country is fishing in their EEZ
-#     max_pred < 0.5 & pred_presence > 0 & flag_fin == eez_sovereign ~ 1,
-#     max_pred >= 0.5 & pred_presence >= 0.5 ~ 1,
-#     TRUE ~ 0
-#   )) %>%
-#   dplyr::select(-max_pred) %>% # if we run it like this, then Russia for example is really aggregated for 6-12m, but really dispersed for <6m...
-#     mutate(pred_presence_rescale =
-#            case_when((elevation_m >= -200  & distance_from_shore_m <= 50) & pred_presence_rescale == 1 ~ 1, # limit to 200m depth and 50km offshore. The distance from shore is actually in km not in m
-#                      TRUE ~ 0)) %>%
-#   mutate(pred_presence_rescale = ifelse(fao_id %in% c(48, 88, 58), 0, pred_presence_rescale)) %>% # remove any antarctica cells for artisanal
-#   mutate(pred_presence_rescale = ifelse(sst_c_mean <= 0, 0, pred_presence_rescale))
 
 # test <- stage_1_preds_rescale %>% filter(pred_presence_rescale == 1)
 
@@ -408,7 +392,7 @@ foreach(flag = model_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "c
     dplyr::select(pixel_id, lon, lat, year, flag_fin, length_category, eez_sovereign, eez_country_name, fao_id, fao_major_fishing_area, nv, sector) %>%
     left_join(hist_fish_data %>%
                 dplyr::select(-nv)) %>% 
-      mutate(nom_active_fishing_days = nv*days_at_sea*mean_engine_p) %>% # this is days right? yes
+      mutate(nom_active_fishing_days = nv*days_at_sea*mean_engine_p) %>% 
   mutate(eff_active_fishing_days = nom_active_fishing_days * (1.0261 ^ (year - 1950))) %>%
         left_join(., days_to_hours_conversion) %>%
     mutate(nom_active_fishing_hours = nom_active_fishing_days*mean,
