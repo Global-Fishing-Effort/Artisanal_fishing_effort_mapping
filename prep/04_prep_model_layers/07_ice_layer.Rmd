@@ -221,36 +221,3 @@ sea_ice_features_fin <- sea_ice_features %>%
 # Save
 qs::qsave(sea_ice_features_fin, here("data/model_features/sea_ice_features_lit.qs"))
 ```
-
-```{r}
-test <- qs::qread(here("data/model_features/sea_ice_features_lit.qs"))
-
-test_rast <- test %>%
-  filter(year == 1950) %>%
-  dplyr::select(lon, lat, n_months_ice) 
-
-plot(test_rast)
-
-# Convert raster to dataframe for ggplot
-# test_df <- as.data.frame(test_rast, xy = TRUE, na.rm = TRUE)
-
-library(viridis)
-
-# Plot
-ggplot(test_rast) +
-  geom_raster(aes(x = lon, y = lat, fill = n_months_ice)) +
-  scale_fill_viridis(name = "", option = "C", na.value = "grey90") +
-  coord_equal() +
-  labs(
-    x = "Months with ice coverage",
-    y = ""
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    panel.grid = element_blank(),
-    axis.text = element_text(size = 10),
-    legend.position = "bottom",
-    plot.title = element_text(hjust = 0.5, size = 14, face = "bold")
-  )
-```
-

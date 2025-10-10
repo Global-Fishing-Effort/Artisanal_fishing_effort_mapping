@@ -347,48 +347,6 @@ ifa_fin_fin <- ifa_fin %>%
 
 qs::qsave(ifa_fin_fin, here("data/model_features/ifa/ifa_fin.qs"))
 
-ifa_fin_fin <- qs::qread(here("data/model_features/ifa/ifa_fin.qs"))
-
-test_df <- ifa_fin_fin %>% 
-  filter(year == 2017) %>%
-  left_join(data_grid) %>%
-  left_join(eez) %>%
-  left_join(eez_lookup) %>%
-  filter(eez_sovereign %in% missing_eez)
-
-setdiff(missing_eez, unique(test_df$eez_sovereign)) # cool, these aren't in the fishing data. 
-
-test_rast <- test_df %>%
-  dplyr::select(lon, lat, ifa) %>%
-  rast(., type = "xyz") %>%
-  plot()
-
-# cool! 
-
-test_df <- ifa_fin_fin %>% 
-  filter(year == 2017) %>%
-  select(lon, lat, ifa) %>%
-  mutate(ifa = factor(ifa, levels = c(0, 1), labels = c("No IFA", "IFA")))
-
-ggplot(test_df) +
-  geom_raster(aes(x = lon, y = lat, fill = ifa)) +
-  coord_equal() +
-  scale_fill_manual(
-    name = "IFA status",
-    values = c("No IFA" = "grey85", "IFA" = "#1b9e77"),
-    drop = FALSE
-  ) +
-  labs(
-    x = "Inshore fishing areas",
-    y = ""
-  ) +
-  theme_minimal(base_size = 12) +
-  theme(
-    panel.grid = element_blank(),
-    axis.text = element_text(size = 10),
-    legend.position = "bottom",
-    plot.title = element_text(hjust = 0.5, size = 14, face = "bold")
-  )
 
 ```
 

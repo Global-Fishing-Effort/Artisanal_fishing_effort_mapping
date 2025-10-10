@@ -1,0 +1,404 @@
+---
+title: "Make figures for manuscript"
+output: html_document
+date: "2025-10-10"
+---
+
+# Summary
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(terra)
+library(foreach)
+library(doParallel)
+library(glue)
+library(qs)
+library(here)
+library(countrycode)
+library(strex)
+library(data.table)
+library(scales)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+library(viridis)
+
+
+source(here("R/dir.R"))
+
+
+data_grid <- data.table::fread(here::here("data/model_features/global_grid.csv")) %>%
+  st_drop_geometry %>%
+  dplyr::select(lon, lat, pixel_id)
+```
+
+Lets compare our artisanal modelling to Rousseau et al. artisanal data 
+
+```{r}
+saup_codes <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv")
+
+# lets load in the mapped artisanal powered and unpowered and join
+options(timeout = 600)  # extend timeout to 10 minutes
+
+mapped_2017_apw <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/effort_mapped/mapped_2017_APW.csv")
+
+mapped_2017_up <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/effort_mapped/mapped_2017_UP.csv")
+
+all_rousseau_2017 <- rbind(mapped_2017_apw, mapped_2017_up)
+
+  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/zenodo_data/artisanal_skylight_sentinel/mapped_by_flag_country/"), full.names = TRUE)
+
+    all_data <- lapply(all_files_flag, fread) %>%
+      bind_rows()
+    
+    all_data_2017 <- all_data %>%
+      filter(year == 2017)
+    
+test_new <- all_data_2017 %>%    
+      group_by(lon, lat) %>%
+      summarise(effort = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
+      ungroup() %>%
+      filter(effort > 0) %>%
+      rast(., type = "xyz")
+    
+    
+test_rousseau <- all_rousseau_2017 %>%
+  group_by(Lon, Lat) %>%
+  summarise(nom_eff = sum(NomActive, na.rm = TRUE)) %>%
+  ungroup() %>%
+  na.omit() %>%
+  filter(nom_eff > 0) %>%
+  rast(., type = "xyz")
+
+
+par(mfrow = c(2, 1))  # 2 rows, 1 column
+plot(test_new, main = "Predicted effort (new model)")
+plot(test_rousseau, main = "Rousseau et al. 2019 effort")
+
+# interesting, looks pretty similar, however, ours is definitely 1) more concentrated, and 2) closer to shore. I am a little confused because presumably Watson (and by extension Rousseau) have the same <=50km or >=200m depth as us, but it looks like their artisnal goes out to the edge of EEZs (very low effort all the way out on the edge though). Just looking at unpowered looks a lot more similar.
+
+```
+
+Lets make a plot showing effort in China in 1950 vs 1985 vs 2017 for industrial 
+
+```{r}
+cell_area_rousseau <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/CellstoLME_EEZ.csv") %>%
+  distinct(lon = Lon, lat = Lat, pixel_area_km2 = Area)
+
+rousseau_ind_2017 <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/effort_mapped/mapped_2017_I.csv")
+rousseau_ind_1985 <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/effort_mapped/mapped_1985_I.csv")
+rousseau_ind_1950 <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/effort_mapped/mapped_1950_I.csv")
+
+
+rousseau_chn <- rousseau_ind_2017 %>%
+  mutate(year = 2017) %>%
+  filter(SAUP == 156) %>%
+  rbind(rousseau_ind_1985 %>% filter(SAUP == 156) %>% mutate(year = 1985)) %>%
+  rbind(rousseau_ind_1950 %>% filter(SAUP == 156) %>% mutate(year = 1950)) %>%
+  group_by(year, lon = Lon, lat = Lat) %>%
+  summarise(nom_eff = sum(NomActive, na.rm = TRUE)) %>%
+  ungroup() %>%
+  na.omit() %>%
+  filter(nom_eff > 0) %>%
+  transmute(year, lon, lat, nom_eff, source = "Rousseau et al 2024") %>%
+  left_join(cell_area_rousseau) %>%
+  mutate(eff_km2 = nom_eff/pixel_area_km2)
+  
+# SAUP = 156 for China
+area_new <- fread(file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_by_flag_country/model_preds_1950_2017_CHN.csv")) %>%
+  distinct(lon, lat, pixel_area_km2)
+
+new_china_ind <- fread(file.path(rdsi_dir, "prep/random_forest/zenodo_data/mapped_by_flag_country/model_preds_1950_2017_CHN.csv")) %>%
+  filter(year %in% c(1950, 1985, 2017)) %>%
+  group_by(year, lon, lat) %>%
+  summarise(nom_eff = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  filter(nom_eff > 0) %>%
+  transmute(year, lon, lat, nom_eff, source = "Model") %>%
+  left_join(area_new) %>%
+  mutate(eff_km2 = nom_eff/pixel_area_km2)
+
+years <- c(1950, 1985, 2017)
+
+pdat <- bind_rows(new_china_ind, rousseau_chn) %>%
+  mutate(
+    year   = factor(year, levels = years),
+    source = factor(source, levels = c("Model", "Rousseau et al 2024"))
+  )
+
+# consistent extents across all facets
+lims <- pdat %>%
+  summarise(xmin = min(lon), xmax = max(lon),
+            ymin = min(lat), ymax = max(lat))
+
+
+
+# Your custom bins
+breaks_num <- c(0.02, 0.2, 2, 20, 200, 2000)
+labels     <- c("<0.02", "0.02-0.2", "0.2-2", "2-20", "20-200", "200-2000", ">2000")
+colors     <- c("#FFFFE4", "#EFF3FE", "#CADBEE", "#A8C9E0", "#E8F4A2", "#F1B16D", "#C54B53")
+names(colors) <- labels
+
+# Combine old + new
+pdat <- bind_rows(rousseau_chn, new_china_ind) %>%
+  mutate(
+    eff_bin = cut(
+      eff_km2,
+      breaks = c(-Inf, breaks_num, Inf),   # add open-ended bins
+      labels = labels,
+      right = FALSE,
+      include.lowest = TRUE
+    ),
+    eff_bin = factor(eff_bin, levels = labels, ordered = TRUE)
+  )
+
+
+# 1. Get global land polygons (at medium resolution)
+land <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Plot with coord_sf()
+(p <- ggplot() +
+  geom_raster(data = pdat, aes(lon, lat, fill = eff_bin)) +
+  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1) +
+  facet_grid(year ~ source) +
+  coord_sf(
+    xlim = range(pdat$lon, na.rm = TRUE),
+    ylim = range(pdat$lat, na.rm = TRUE),
+    expand = FALSE
+  ) +
+  scale_fill_manual(
+    values = colors,
+    drop = FALSE,
+    name = "Fishing Effort (kW hours/km²)",
+    guide = guide_legend(
+      nrow = 1,
+      byrow = TRUE,
+      title.position = "top",
+      title.hjust = 0.5
+    )
+  ) +
+  labs(x = NULL, y = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.5),
+    panel.grid = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold"),
+    strip.text = element_text(face = "bold")
+  ))
+
+
+# 4. Save
+ggsave(here("figs/fishing_effort_china_with_land.png"), plot = p, width = 10, height = 6, dpi = 600, bg = "white")
+
+
+
+```
+
+Plot showing 2017 maps comparing our results, AIS from GFW, and Rousseau et al. 2024
+
+```{r}
+
+rousseau_2017 <- rousseau_ind_2017 %>%
+  mutate(year = 2017) %>%
+  group_by(lon = Lon, lat = Lat) %>%
+  summarise(nom_eff = sum(NomActive, na.rm = TRUE)) %>%
+  ungroup() %>%
+  na.omit() %>%
+  filter(nom_eff > 0) %>%
+  transmute(lon, lat, nom_eff, source = "Rousseau et al 2024") %>%
+  left_join(cell_area_rousseau) %>%
+  mutate(eff_km2 = nom_eff/pixel_area_km2)
+
+new_data <- fread("/home/ubuntu/data_storage/prep/random_forest/zenodo_data/mapped_industrial_effort_predictions_1950_2017.csv") %>%
+  filter(year == 2017)
+
+area_new <- new_data %>%
+  distinct(lon, lat, pixel_area_km2)
+
+new_ind <- new_data %>%
+  group_by(lon, lat) %>%
+  summarise(nom_eff = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  filter(nom_eff > 0) %>%
+  transmute(lon, lat, nom_eff, source = "Model") %>%
+  left_join(area_new) %>%
+  mutate(eff_km2 = nom_eff/pixel_area_km2)
+
+
+gfw_vessel_registry <- qread(here("prep/06_manuscript/data/gfw_vessel_registry_fix.qs")) %>%
+  dplyr::distinct(mmsi, flag_gfw, length_category, gear, tonnage_gt_gfw, engine_power_kw_gfw)
+
+gfw_2017 <- qread(file.path(rdsi_raw_dir, "global_fishing_watch/apparent_fishing_hours_mmsi/v3_aggregated/all_effort_2017.qs")) %>%
+  dplyr::select(x = cell_ll_lon, y = cell_ll_lat,  mmsi, hours, fishing_hours) %>%
+  left_join(gfw_vessel_registry)
+  
+
+# gfw_2017 <- qs::qread("/home/ubuntu/data_storage/prep/gfw_props/deg_half/all_effort_gear_length_props_2017.qs")
+
+res <- 0.1
+deg_to_km <- 111.32
+
+gfw_2017_area <- gfw_2017 %>%
+  mutate(pixel_area_km2 = (res * deg_to_km) * (res * deg_to_km * cos(pi * y / 180))) %>%
+  distinct(lon = x, lat = y, pixel_area_km2)
+
+
+gfw_data <- gfw_2017 %>%
+  mutate(kw_fishing_hours = fishing_hours * engine_power_kw_gfw) %>%
+    group_by(lon = x, lat = y) %>%
+  summarise(nom_eff = sum(kw_fishing_hours, na.rm = TRUE)) %>%
+  ungroup() %>%
+  filter(nom_eff > 0) %>%
+  transmute(lon, lat, nom_eff, source = "AIS (GFW)") %>%
+  left_join(gfw_2017_area) %>%
+  mutate(eff_km2 = nom_eff/pixel_area_km2)
+
+
+
+pdat <- bind_rows(gfw_data, new_ind, rousseau_2017) %>%
+  mutate(
+    source = factor(source, levels = c("AIS (GFW)", "Model", "Rousseau et al 2024"))
+  )
+
+# consistent extents across all facets
+lims <- pdat %>%
+  summarise(xmin = min(lon), xmax = max(lon),
+            ymin = min(lat), ymax = max(lat))
+
+
+
+# Your custom bins
+breaks_num <- c(0.02, 0.2, 2, 20, 200, 2000)
+labels     <- c("<0.02", "0.02-0.2", "0.2-2", "2-20", "20-200", "200-2000", ">2000")
+colors     <- c("#FFFFE4", "#EFF3FE", "#CADBEE", "#A8C9E0", "#E8F4A2", "#F1B16D", "#C54B53")
+names(colors) <- labels
+
+# Combine old + new
+pdat <- bind_rows(gfw_data, new_ind, rousseau_2017) %>%
+  mutate(
+    eff_bin = cut(
+      eff_km2,
+      breaks = c(-Inf, breaks_num, Inf),   # add open-ended bins
+      labels = labels,
+      right = FALSE,
+      include.lowest = TRUE
+    ),
+    eff_bin = factor(eff_bin, levels = labels, ordered = TRUE)
+  )
+
+
+# 1. Get global land polygons (at medium resolution)
+land <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Plot with coord_sf()
+p <- ggplot() +
+  geom_raster(data = pdat, mapping = aes(lon, lat, fill = eff_bin)) +
+  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1) +
+  facet_wrap(~ source, nrow = 2) +
+  coord_sf(
+    xlim = range(pdat$lon, na.rm = TRUE),
+    ylim = range(pdat$lat, na.rm = TRUE),
+    expand = FALSE
+  ) +
+  scale_fill_manual(
+    values = colors,
+    drop = FALSE,
+    name = "Fishing Effort (kW hours/km²)",
+    guide = guide_legend(
+      nrow = 1,
+      byrow = TRUE,
+      title.position = "top",
+      title.hjust = 0.5
+    )
+  ) +
+  labs(x = NULL, y = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(
+        panel.border = element_rect(colour = "black", fill = NA, linewidth = 0.5),
+    panel.grid = element_blank(),
+    legend.position = "bottom",
+    legend.title = element_text(face = "bold"),
+    strip.text = element_text(face = "bold")
+  )
+
+p
+
+ggsave(here("figs/fishing_effort_comp_2017.png"), plot = p, width = 10, height = 6, dpi = 600, bg = "white")
+
+
+```
+
+
+Inshore fishing areas 
+
+```{r}
+
+ifa_fin_fin <- qs::qread(here("data/model_features/ifa/ifa_fin.qs"))
+
+# cool! 
+
+test_df <- ifa_fin_fin %>% 
+  filter(year == 2017) %>%
+  select(lon, lat, ifa) %>%
+  mutate(ifa = factor(ifa, levels = c(0, 1), labels = c("No IFA", "IFA")))
+
+ggplot(test_df) +
+  geom_raster(aes(x = lon, y = lat, fill = ifa)) +
+  coord_equal() +
+  scale_fill_manual(
+    name = "IFA status",
+    values = c("No IFA" = "grey85", "IFA" = "#1b9e77"),
+    drop = FALSE
+  ) +
+  labs(
+    x = "Inshore fishing areas",
+    y = ""
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text = element_text(size = 10),
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold")
+  )
+
+ggsave(here("figs/ifa_layer.png"))
+```
+
+Sea ice
+
+```{r}
+
+test <- qs::qread(here("data/model_features/sea_ice_features_lit.qs"))
+
+test_rast <- test %>%
+  filter(year == 1950) %>%
+  dplyr::select(lon, lat, n_months_ice) 
+
+# Convert raster to dataframe for ggplot
+# test_df <- as.data.frame(test_rast, xy = TRUE, na.rm = TRUE)
+
+# Plot
+ggplot(test_rast) +
+  geom_raster(aes(x = lon, y = lat, fill = n_months_ice)) +
+  scale_fill_viridis(name = "", option = "C", na.value = "grey90") +
+  coord_equal() +
+  labs(
+    x = "Months with ice coverage",
+    y = ""
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text = element_text(size = 10),
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"))
+
+    ggsave(here("figs/ice_layer.png"))
+
+```
+
+
