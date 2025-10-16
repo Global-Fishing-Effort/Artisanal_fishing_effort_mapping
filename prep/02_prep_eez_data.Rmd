@@ -131,7 +131,7 @@ eez_test <- eez_raw %>%
 # 
 # mapview(test)
 
-## need to filter out these places because they are uninhabited, and thus won't have artisnal fisheries
+## need to filter out these places because they are uninhabited, and thus won't have artisanal fisheries
 # Macquarie Island, MRGID == 8311
 # Wake Island, MRGID == 8319
 # Glorioso Islands, MRGID == 48945

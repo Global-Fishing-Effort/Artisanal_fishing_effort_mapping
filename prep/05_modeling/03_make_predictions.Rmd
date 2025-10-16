@@ -348,14 +348,6 @@ qs::qsave(all_preds, file.path(rdsi_dir, glue("prep/random_forest/artisanal_skyl
 
 stopCluster(cl)
 
-# test <- model_data %>%
-#   filter(flag_fin == "ITA") %>%
-#   dplyr::group_by(lon, lat) %>%
-#   summarise(nv = sum(nv, na.rm = TRUE)) %>%
-#   ungroup() %>%
-#   rast(., type = "xyz")
-# plot(test)
-
 ```
 
 Combine all years for flag and save 
