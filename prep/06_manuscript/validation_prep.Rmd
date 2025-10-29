@@ -1,0 +1,325 @@
+---
+title: "Validation with real data"
+output: html_document
+date: "2025-10-10"
+---
+
+# Summary
+
+We will compare our data to data from ABARES (Australia), GFW Sentinel-1 data, [Couce et al. 2020](https://essd.copernicus.org/articles/12/373/2020/), ICCAT: https://www.iccat.int/en/accesingdb.HTML 
+
+
+Data sources:
+
+ - ABARES (Australia data, 2010-2024) 2025: https://www.agriculture.gov.au/abares/research-topics/fisheries/fishery-status/fsr-map-data#all-fisheries-combined-allfsy 
+ - GFW Sentinel-1 data (2017-present): https://globalfishingwatch.org/data-download/datasets/public-sar-vessel-detections%3Av20231026
+ - Couce et al. 2020; Reconstructing three decades of total international trawling effort in the North Sea; https://essd.copernicus.org/articles/12/373/2020/; Trawling effort in North Sea from 1985-2015; https://data.cefas.co.uk/view/19722 
+ - ICCAT data from sampling: https://www.iccat.int/en/accesingdb.HTML 
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(terra)
+library(glue)
+library(qs)
+library(here)
+library(sf)
+library(Hmisc)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(readxl)
+library(mapview)
+library(data.table)
+library(readr)
+library(terra)
+
+source(here("R/dir.R"))
+
+data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
+  st_drop_geometry() %>%
+  dplyr::select(lon, lat, pixel_id)
+
+# Convert grid to raster
+grid <- data_grid %>%
+  dplyr::select(lon, lat, pixel_id) %>% 
+  rast(., type = "xyz", crs = "EPSG:4326") 
+
+```
+
+ICCAT Sample fishing statistics and fish sizes
+
+ - Catch and fishing effort statistics for each species by small area (1x1 degree squares for most gears, 5x5 degrees squares for longlines), gear, flag, and month. Task 2 data also include actual size frequencies of samples measured for each species by small area, gear, flag and month. In some cases, detailed size samples are also extrapolated to match total catches in order to be used in stock assessments. This includes the CATDIS and catch-at-size datasets. 
+ 
+ 
+I believe this data is catch and effort with sizes "1x1"   "5x5"   "10x20" "10x10" "5x10"  "none" 
+
+I think the first dataset will be most useful
+
+```{r}
+df <- mdb.get("/home/ubuntu/data_storage/raw_data/ICCAT/task_2_catch_effort/all_data_t2ce_20250131web.mdb")
+
+spatial_data <- df[[3]]
+
+# lets filter for 1x1 
+spat_df_1 <- spatial_data %>%
+  filter(SquareTypeCode == "1x1") %>% # most is 1x1, good
+  pivot_longer(values_to = "catch", cols = 20:54, names_to = "species") %>%
+  filter(CatchUnit == "kg")
+
+test_2023 <- spat_df_1 %>%
+#  filter(YearC == 2023) %>%
+  group_by(Lon, Lat) %>%
+  summarise(catch = sum(catch, na.rm = TRUE)) %>%
+  ungroup() 
+
+
+# 1. Get global land polygons (at medium resolution)
+land <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Plot with coord_sf()
+p <- ggplot() +
+  geom_raster(data = test_2023, mapping = aes(Lon, Lat, fill = catch)) +
+  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1)
+
+p # ok, so it looks like mostly in North Atlantic (Norway, Denmark, etc), Meditteraen, and Indian ocean is reported. It probably varies each year. 
+
+# what about the longline reconstruction 
+
+ll_r <- read.csv("/home/ubuntu/data_storage/raw_data/ICCAT/longline_reconstruction/EFFDIS_LL2000-2023.csv")
+
+test <- ll_r %>%
+  group_by(xLon5, yLat5) %>%
+  summarise(eff = sum(ReportedEffort, na.rm = TRUE)) %>%
+  ungroup()
+
+ggplot() +
+  geom_raster(data = test, mapping = aes(xLon5, yLat5, fill = eff)) +
+  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1)
+# all of the atlantic, because the cells are so large. 
+
+# catch data raised to total landings at 5x5 degree
+
+all_catch <- read.csv("/home/ubuntu/data_storage/raw_data/ICCAT/cdis5023-all9sp.csv")
+
+test <- all_catch %>%
+  group_by(Lon5, Lat5) %>%
+  summarise(catch = sum(Catch_t)) %>%
+  ungroup()
+
+ggplot() +
+  geom_raster(data = test, mapping = aes(Lon5, Lat5, fill = catch)) +
+  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1) # ok this appears to be the same as the first data we read in, just aggregated to 5x5 and matched to total catch statistics? 
+
+# tropicals data from ICCAT
+trop_df <- read_xlsx("/home/ubuntu/data_storage/raw_data/ICCAT/task_2_catch_effort/tropical_fishery_t2ce_ETRO-PS1991-2023_bySchool_v1.xlsx", sheet = 2)
+# i have no idea what these columns mean...
+
+
+```
+
+GFW Sentinel 1 data
+
+ - "We do not classify objects within 1 km of shore, because of ambiguous coastlines and rocks. Nor do we classify objects in much of the Arctic and Antarctic, where sea ice can create too many false positives; in both regions, however, vessel traffic is either very low (Antarctic) or in countries that have a high adoption of AIS (northern European or northern North American countries)."
+ - 
+
+```{r}
+## read in and rasterize sentinel 1 data 
+all_s1 <- lapply(list.files("/home/ubuntu/data_storage/raw_data/global_fishing_watch/sentinel_1_data", full.names = TRUE), fread) %>%
+  bind_rows() %>%
+  filter(matched_category == "fishing",
+         fishing_score >= 0.5) %>%
+  mutate(length_category = case_when(
+    length_m <6 ~ "Less than 6m",
+    length_m >=6 & length_m < 12 ~ "6-12m",
+    length_m >=12 & length_m < 24 ~ "12-24m",
+    length_m >= 24 & length_m < 50 ~ "24-50m",
+    length_m >=50 ~ "Over 50m"
+  ))
+
+qs::qsave(all_s1, file.path("/home/ubuntu/data_storage/raw_data/global_fishing_watch/sentinel_1_prepped.qs"))
+fwrite(all_s1, file.path("/home/ubuntu/data_storage/raw_data/global_fishing_watch/sentinel_1_prepped.csv"), row.names = FALSE)
+
+test <- all_s1 %>%
+  mutate(lon_1 = round(lon),
+         lat_1 = round(lat)) %>%
+  group_by(lon_1, lat_1) %>%
+  summarise(nv = n()) %>%
+  ungroup()
+
+test_r <- rast(test, type = "xyz")
+plot(test_r) # cool. Looks like this will only cover coastal fisheries. How far offshore though? Seems like we can definitely compare industrial with this, if we limit it to EEZs and no high seas? And it has length categories so we could disaggregate it that way perhaps. 
+
+# 1) Make a SpatVector of points in EPSG:4326
+pts <- vect(all_s1[, c("lon","lat")], geom = c("lon","lat"), crs = "EPSG:4326")
+
+# 2) Give each point a value of 1, then rasterize by sum to get counts per cell
+pts$one <- 1L
+count <- rasterize(pts, grid, field = "one", fun = "sum", background = 0)
+
+total <- global(count, "sum", na.rm = TRUE)
+
+prop_vessels_s1 <- count/3112487
+
+names(prop_vessels_s1) <- "proportion_vessels"
+writeRaster(pa, here("data/validation/s1_prop_vessels_1deg.tif"), overwrite = TRUE)
+prop_vessels_s1_df <- prop_vessels_s1 %>%
+  as.data.frame(., xy = TRUE) %>%
+  rename(lon = x, lat = y) %>%
+  left_join(data_grid) %>%
+  filter(!is.na(pixel_id))
+
+fwrite(prop_vessels_s1_df, here("data/validation/s1_prop_vessels_1deg.csv"), row.names = FALSE)
+
+
+# 3) Convert counts to presence/absence (1 inside, NA outside)
+pa <- ifel(count > 0, 1, NA)
+
+# 4) (Optional) keep it tidy: name, write to disk
+names(pa) <- "presence"
+writeRaster(pa, here("data/validation/s1_presence_1deg.tif"), overwrite = TRUE)
+
+pa_df <- pa %>%
+  as.data.frame(., xy = TRUE) %>%
+  rename(lon = x, lat = y) %>%
+  left_join(data_grid) %>%
+  filter(!is.na(pixel_id))
+
+fwrite(pa_df, here("data/validation/s1_presence_1deg.csv"), row.names = FALSE)
+
+test <- pa_df %>%
+  filter(is.na(pixel_id)) %>%
+  dplyr::select(lon, lat, presence) %>%
+  rast(., type = "xyz")
+
+## now we need to see the coverage of sentinel-1 data, which we will take from Paolo et al. 2024: https://www.nature.com/articles/s41586-023-06825-8/figures/5; https://figshare.com/articles/journal_contribution/Satellite_mapping_reveals_extensive_industrial_activity_at_sea_-_analysis_data/24309475?file=44031654
+paolo_tbl <- read.csv(here("data/validation/study_area.csv"))
+
+wkt_to_sf <- function(df, col){
+  st_as_sfc(df[[col]], crs = 4326) |>
+    st_make_valid() |>
+    st_collection_extract("POLYGON") |>
+    st_as_sf() |>
+    mutate(src = col)
+}
+
+sa_00 <- wkt_to_sf(paolo_tbl, "study_area")
+sa_02 <- wkt_to_sf(paolo_tbl, "study_area_02")
+sa_05 <- wkt_to_sf(paolo_tbl, "study_area_05")
+
+# map
+plot(st_geometry(sa_00), col = rgb(0,0,1,0.2), border = NA)
+plot(st_geometry(sa_02), col = rgb(1,0,0,0.2),  border = NA)
+plot(st_geometry(sa_05), col = rgb(0,1,0,0.2),  border = NA)
+
+
+# 4) Save for reuse
+st_write(sa_00, here("data/validation/paolo_study_area.gpkg"), layer = "study_area", delete_layer = TRUE)
+
+# 5) Make a 1° mask raster aligned to your lon/lat grid
+sa_r <- rasterize(vect(sa_00), grid, field=1, background=NA)  # 1 inside, NA outside
+sa_r <- terra::mask(sa_r, grid)
+writeRaster(sa_r, here("data/validation/paolo_study_area_1deg.tif"), overwrite=TRUE)
+
+# save as data frame so we can filter our fishing data to these cells 
+sa_df <- sa_r %>%
+  as.data.frame(., xy = TRUE) %>%
+  rename(lon = x, lat = y) %>%
+  left_join(., data_grid) # nice
+
+fwrite(sa_df, here("data/validation/paolo_study_area_1deg.csv"), row.names = FALSE)
+  
+# read in industrial fishing data and filter for only study are cells
+
+ind_fishing_full <- lapply(list.files("/home/ubuntu/data_storage/prep/random_forest/predictions", full.names = TRUE)[-148], qs::qread) %>%
+  bind_rows()
+
+ind_fishing_s1_area <- ind_fishing_full %>%
+  filter(pixel_id %in% unique(sa_df$pixel_id), 
+         year == 2017)
+
+fwrite(ind_fishing_s1_area, here("data/validation/ind_fishing_s1_area.csv"), row.names = FALSE)
+
+
+ind_fishing_presence <- ind_fishing_s1_area %>%
+  filter(nv > 0) %>%
+  distinct(pixel_id, lon, lat) %>%
+  mutate(presence = 1)
+
+fwrite(ind_fishing_presence, here("data/validation/ind_fishing_s1_area_presence.csv"), row.names = FALSE)
+
+ind_fishing_presence_r <- ind_fishing_presence %>%
+  dplyr::select(-pixel_id) %>%
+  rast(., crs = crs(grid))
+
+writeRaster(ind_fishing_presence_r, here("data/validation/ind_fishing_s1_area_presence.tif"))
+
+
+
+ind_fishing_prop <- ind_fishing_s1_area %>%
+  filter(nv > 0) %>%
+  group_by(pixel_id, lon, lat) %>%
+  summarise(nv = sum(nv, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(total_nv = sum(nv, na.rm = TRUE)) %>%
+  mutate(prop_nv = nv/total_nv) %>%
+  dplyr::select(pixel_id, lon, lat, prop_nv)
+
+fwrite(ind_fishing_prop, here("data/validation/ind_fishing_s1_area_prop.csv"), row.names = FALSE)
+
+ind_fishing_prop_r <- ind_fishing_prop %>%
+  dplyr::select(-pixel_id) %>%
+  rast(., crs = crs(grid))
+
+writeRaster(ind_fishing_prop_r, here("data/validation/ind_fishing_s1_area_prop.tif"))
+
+
+
+```
+
+ABARES data 
+ - 1x1 degree
+ - 2010-2019
+ - We could limit our data to those same cells and compare if there is fishing 
+
+```{r}
+
+# List all layers in the geodatabase
+st_layers("/home/ubuntu/data_storage/raw_data/ABARES/ALLFSY/ALLFSY.gdb")
+
+# Read a specific layer (replace "layer_name" with one from the list)
+data <- st_read("/home/ubuntu/data_storage/raw_data/ABARES/ALLFSY/ALLFSY.gdb", layer = "ALLFSY_fp_2019")
+
+mapview(data)
+
+test <- data %>%
+  st_drop_geometry()
+## looks like "ALLFSY_fp_yyyy" layers are total area fished layers? This is gridded so that is probably what we want. Unclear of the resolution. Looks pretty large 
+
+# sanity check
+st_crs(data)$epsg   # should be 4283
+
+# width/height in degrees from each polygon's bbox
+deg_dxdy <- do.call(rbind, lapply(st_geometry(data), function(g) {
+  bb <- st_bbox(g)
+  c(dx = unname(bb["xmax"] - bb["xmin"]),
+    dy = unname(bb["ymax"] - bb["ymin"]))
+})) %>% as.data.frame()
+
+# summarize (median + mode after rounding to tame tiny float jitter)
+mode_of <- function(x) {
+  tx <- table(round(x, 6)); as.numeric(names(tx)[which.max(tx)])
+}
+
+tibble(
+  dx_deg_median = median(deg_dxdy$dx),
+  dy_deg_median = median(deg_dxdy$dy),
+  dx_deg_mode   = mode_of(deg_dxdy$dx),
+  dy_deg_mode   = mode_of(deg_dxdy$dy)
+)
+
+# ok cool, it is 1x1 degree, so matches our cell sizes. 
+
+```
+

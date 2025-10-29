@@ -137,18 +137,15 @@ hist_fish_data <- qs::qread(here("data/model_features/rousseau_total_art_vessels
          prop_nom_days_modeled = modeled_nom_active_fishing_days/total_nom_days)
 
 missing_data <- hist_fish_data %>%
-  filter(proportion_nv_modeled != 1) %>%
-  filter(proportion_nv_modeled < 0.9999) # 0 awesome! 
+  # filter(proportion_nv_modeled != 1) %>%
+  # filter(proportion_nv_modeled < 0.9999) %>% # 0 awesome! 
+  filter(is.na(proportion_nv_modeled)) # ok missing a lot.
 
 write.csv(hist_fish_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/artisanal_skylight_sentinel/known_artisanal_effort_rousseau.csv"), row.names = FALSE)
-
-
-
 
 test <- hist_fish_data %>% filter(flag_country_iso3c == "UKR", year == 1950)
 
 sum(test$modeled_nom_active_fishing_hours) # 
-
 
 ```
 

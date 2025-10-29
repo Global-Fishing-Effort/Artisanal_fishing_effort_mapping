@@ -25,6 +25,9 @@ library(rnaturalearthdata)
 library(qs)
 library(stringr)
 library(doParallel)
+library(h3jsr)   
+library(data.table)
+library(lubridate)
 
 source(here("R/dir.R"))
 ```
@@ -33,7 +36,7 @@ Let's explore one file from July 2025, since other files are much larger and unw
 
 ```{r}
 # read in smallest data and take a look
-vessels_2025_july <- read.csv(file.path(rdsi_raw_dir, "global_fishing_watch/sentinel_2_data/sentinel2_vessel_detections_pipev3_20250705.csv"))
+vessels_2025_july <- fread(file.path(rdsi_raw_dir, "global_fishing_watch/sentinel_2_data/sentinel2_vessel_detections_pipev3_20250705.csv"))
 
 colnames(vessels_2025_july)
 
@@ -43,14 +46,26 @@ colnames(vessels_2025_july)
 # [13] "potential_ice"            "matching_score"           "matching_score_secondary" "matching_confidence"     
 # [17] "mmsi"                     "ais_lat_before"           "ais_lat_after"            "ais_lon_before"          
 # [21] "ais_lon_after"            "ais_speed_kn_before"      "ais_speed_kn_after"       "ais_course_before"       
-# [25] "ais_course_after"         "ais_timestamp_before"     "ais_timestamp_after"      "ais_length_m"     
+# [25] "ais_course_after"         "ais_timestamp_before"     "ais_timestamp_after"      "ais_length_m"   
 
-## ok so i think we will want lon, lat, length_m_inferred, presence_score, nonvessel_score, likely_infrastructure, potential_ice
+
+vessels_2025_july <- vessels_2025_july %>%
+    mutate(month = as.character(as_date(floor_date(as_date(detect_timestamp), unit = "month"))))
+
+
+vessels_2025_july <- vessels_2025_july %>%
+  mutate(length_class = case_when(
+        length_m_inferred <6 ~ "Less than 6m",
+    length_m_inferred >=6 & length_m_inferred < 12 ~ "6-12m",
+    length_m_inferred >=12 & length_m_inferred < 24 ~ "12-24m",
+    length_m_inferred >= 24 & length_m_inferred < 50 ~ "24-50m",
+    length_m_inferred >=50 ~ "Over 50m"
+  ))
 
 vessels_july_df <- vessels_2025_july %>%
-  dplyr::select(lon, lat, length_m_inferred, presence_score, nonvessel_score, likely_infrastructure, potential_ice, matching_score, matching_confidence, mmsi) %>%
-  filter(likely_infrastructure == "false", # remove any infrastructure
-         potential_ice == "false", # remove any ice
+  dplyr::select(lon, lat, length_class, presence_score, nonvessel_score, likely_infrastructure, potential_ice, matching_score, matching_confidence, mmsi, month) %>%
+  filter(likely_infrastructure == "FALSE", # remove any infrastructure
+         potential_ice == "FALSE", # remove any ice
          presence_score >= 0.5,
          nonvessel_score < 0.5) # only keep those with high presence score and those that are vessels
 
@@ -66,11 +81,12 @@ mmsi_keep <- vessels_july_df %>%
          matching_confidence < 0.5) # only keep mmsi if the matching confidence is low
 
 vessels_df_fin <- rbind(non_mmsi_keep, mmsi_keep) %>%
-  dplyr::select(lon, lat, length_m_inferred)
+  dplyr::select(lon, lat, length_class, h3_id, month)
+
 
 ```
 
-Now we apply the same filtering as above, but to all files. We will need a file for each year that is lon, lat, length_m_inferred, and year. Each row represents a vessel detection. 
+We will need a file for each year that is lon, lat, length_class, and year. Each row represents a vessel detection. 
 
 ```{r}
 sentinel_files <- list.files(file.path(rdsi_raw_dir, "global_fishing_watch/sentinel_2_data"), full.names = TRUE, pattern = "csv")

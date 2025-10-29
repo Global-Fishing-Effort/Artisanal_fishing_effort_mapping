@@ -1,0 +1,460 @@
+---
+title: "Industrial validation with sentinel-1"
+output: html_document
+date: "2025-10-10"
+---
+
+# Validation Analysis: 
+ - Compare industrial vessel predictions with Sentinel-1 detections
+
+
+```{r setup}
+library(tidyverse)
+library(caret)
+library(ggplot2)
+library(gridExtra)
+
+# Set plotting theme
+theme_set(theme_minimal())
+```
+
+```{r fxns}
+
+# Load data
+load_data <- function() {
+  cat("Loading data...\n")
+  
+  # Load vessel predictions
+  predictions <- read_csv(here('data/validation/ind_fishing_s1_area_presence.csv'), show_col_types = FALSE)
+  cat(sprintf("Loaded %d vessel prediction records\n", nrow(predictions)))
+  
+  # Load Sentinel-1 detections
+  s1_detections <- read_csv(here('data/validation/s1_presence_1deg.csv'), show_col_types = FALSE)
+  cat(sprintf("Loaded %d Sentinel-1 detection records\n", nrow(s1_detections)))
+  
+  return(list(predictions = predictions, s1_detections = s1_detections))
+}
+
+# Create study area grid
+create_study_area_grid <- function() {
+  cat("\nLoading study area grid...\n")
+  
+  # Load the predefined study area
+  study_area <- read_csv(here('data/validation/paolo_study_area_1deg.csv'), show_col_types = FALSE)
+  all_locs <- study_area %>% select(lon, lat)
+  
+  cat(sprintf("Study area contains %d unique 1-degree grid cells\n", nrow(all_locs)))
+  cat(sprintf("Latitude range: (%d, %d)\n", min(all_locs$lat), max(all_locs$lat)))
+  cat(sprintf("Longitude range: (%d, %d)\n", min(all_locs$lon), max(all_locs$lon)))
+  
+  return(all_locs)
+}
+
+# Merge datasets
+merge_datasets <- function(predictions, s1_detections, study_grid) {
+  cat("\nMerging datasets...\n")
+  
+  # Prepare prediction data
+  pred_data <- predictions %>%
+    select(lon, lat, presence) %>%
+    rename(predicted = presence)
+  
+  # Prepare S1 detection data
+  s1_data <- s1_detections %>%
+    select(lon, lat, presence) %>%
+    rename(observed = presence)
+  
+  # Merge with study grid
+  merged <- study_grid %>%
+    left_join(pred_data, by = c("lon", "lat")) %>%
+    left_join(s1_data, by = c("lon", "lat")) %>%
+    mutate(
+      predicted = replace_na(predicted, 0),
+      observed = replace_na(observed, 0)
+    )
+  
+  cat(sprintf("Total grid cells: %d\n", nrow(merged)))
+  cat(sprintf("Cells with predictions: %d\n", sum(merged$predicted)))
+  cat(sprintf("Cells with S1 detections: %d\n", sum(merged$observed)))
+  
+  return(merged)
+}
+
+```
+
+Calculate validation metrics
+
+```{r}
+calculate_metrics <- function(merged_data) {
+  cat("\n============================================================\n")
+  cat("VALIDATION METRICS\n")
+  cat("============================================================\n\n")
+
+  # Ensure factors are exactly c("0","1") with "1" as the positive class
+  pred_f <- factor(merged_data$predicted, levels = c(0, 1), labels = c("0", "1"))
+  obs_f  <- factor(merged_data$observed,  levels = c(0, 1), labels = c("0", "1"))
+
+  # Confusion table with rows = Observed (reference), cols = Predicted (data)
+  cm_tbl <- table(Observed = obs_f, Predicted = pred_f)
+
+  # Extract counts deterministically
+  # Rows: Observed 0,1 ; Cols: Predicted 0,1
+  tn <- as.integer(cm_tbl["0", "0"])
+  fp <- as.integer(cm_tbl["0", "1"])
+  fn <- as.integer(cm_tbl["1", "0"])
+  tp <- as.integer(cm_tbl["1", "1"])
+
+  total <- tn + fp + fn + tp
+
+  # Metrics computed directly from counts
+  accuracy    <- (tp + tn) / total
+  precision   <- if ((tp + fp) > 0) tp / (tp + fp) else NA_real_
+  recall      <- if ((tp + fn) > 0) tp / (tp + fn) else NA_real_         # sensitivity
+  specificity <- if ((tn + fp) > 0) tn / (tn + fp) else NA_real_
+  f1 <- if (is.na(precision) || is.na(recall) || (precision + recall) == 0) {
+    NA_real_
+  } else {
+    2 * precision * recall / (precision + recall)
+  }
+
+  # Print a neat table
+  cat("Confusion Matrix (rows=Observed, cols=Predicted):\n")
+  print(cm_tbl)
+  cat("\nCounts:\n")
+  cat(sprintf("  TP: %d  TN: %d  FP: %d  FN: %d\n", tp, tn, fp, fn))
+
+  cat(sprintf("\nOverall Metrics:\n"))
+  cat(sprintf("  Accuracy:    %.4f\n", accuracy))
+  cat(sprintf("  Precision:   %.4f (TP / (TP + FP))\n", precision))
+  cat(sprintf("  Recall:      %.4f (TP / (TP + FN))\n", recall))
+  cat(sprintf("  F1 Score:    %.4f\n", f1))
+  cat(sprintf("  Specificity: %.4f (TN / (TN + FP))\n", specificity))
+
+  # Agreement analysis
+  both_present <- tp
+  both_absent  <- tn
+  pred_only    <- fp
+  obs_only     <- fn
+
+  cat(sprintf("\nSpatial Agreement:\n"))
+  cat(sprintf("  Both present (TP):     %5d (%.2f%%)\n", both_present, 100 * both_present / total))
+  cat(sprintf("  Both absent (TN):      %5d (%.2f%%)\n", both_absent,  100 * both_absent  / total))
+  cat(sprintf("  Predicted only (FP):   %5d (%.2f%%)\n", pred_only,    100 * pred_only    / total))
+  cat(sprintf("  Observed only (FN):    %5d (%.2f%%)\n", obs_only,     100 * obs_only     / total))
+  cat(sprintf("  Total agreement:       %5d (%.2f%%)\n", both_present + both_absent,
+              100 * (both_present + both_absent) / total))
+
+  # Return everything the rest of your pipeline expects
+  return(list(
+    confusion_matrix = cm_tbl,
+    accuracy = as.numeric(accuracy),
+    precision = as.numeric(precision),
+    recall = as.numeric(recall),
+    f1 = as.numeric(f1),
+    specificity = as.numeric(specificity),
+    tp = tp, tn = tn, fp = fp, fn = fn
+  ))
+}
+
+
+```
+
+Confusion matrix
+
+```{r}
+plot_confusion_matrix <- function(cm, save_path = ('figs/confusion_matrix.png')) {
+  cm_df <- as.data.frame(cm)
+  colnames(cm_df) <- c("Observed", "Predicted", "Count")
+  
+  cm_df$Observed <- factor(cm_df$Observed, levels = c(1, 0), labels = c("Present", "Absent"))
+  cm_df$Predicted <- factor(cm_df$Predicted, levels = c(1, 0), labels = c("Present", "Absent"))
+  
+  p <- ggplot(cm_df, aes(x = Predicted, y = Observed, fill = Count)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = Count), size = 10, color = "black") +
+    scale_fill_gradient(low = "white", high = "steelblue") +
+    labs(
+      title = "Confusion Matrix: Model Predictions vs Sentinel-1 Detections",
+      x = "Predicted",
+      y = "Observed (Sentinel-1)"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+      axis.text = element_text(size = 12),
+      axis.title = element_text(size = 13, face = "bold")
+    )
+  
+  ggsave(save_path, p, width = 8, height = 6, dpi = 300)
+  cat(sprintf("\nSaved confusion matrix plot to %s\n", save_path))
+}
+
+
+```
+
+Spatial comparison
+
+```{r}
+plot_spatial_comparison <- function(merged_data, save_path = 'figs/spatial_comparison.png') {
+  # Create agreement categories
+  merged_data <- merged_data %>%
+    mutate(
+      category = case_when(
+        predicted == 1 & observed == 1 ~ "Both (TP)",
+        predicted == 1 & observed == 0 ~ "Predicted only (FP)",
+        predicted == 0 & observed == 1 ~ "Observed only (FN)",
+        TRUE ~ "No fishing (TN)"
+      )
+    )
+  
+  # Plot 1: Predictions
+  p1 <- merged_data %>%
+    filter(predicted == 1) %>%
+    ggplot(aes(x = lon, y = lat)) +
+    geom_point(color = "blue", size = 0.5, alpha = 0.6) +
+    labs(
+      title = "Model Predictions",
+      subtitle = sprintf("n = %d", sum(merged_data$predicted == 1)),
+      x = "Longitude",
+      y = "Latitude"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(face = "bold"))
+  
+  # Plot 2: Observations
+  p2 <- merged_data %>%
+    filter(observed == 1) %>%
+    ggplot(aes(x = lon, y = lat)) +
+    geom_point(color = "red", size = 0.5, alpha = 0.6) +
+    labs(
+      title = "Sentinel-1 Detections",
+      subtitle = sprintf("n = %d", sum(merged_data$observed == 1)),
+      x = "Longitude",
+      y = "Latitude"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(face = "bold"))
+  
+  # Plot 3: Agreement map
+  p3 <- merged_data %>%
+   # filter(category != "None") %>%
+    ggplot(aes(x = lon, y = lat, color = category)) +
+    geom_point(size = 1, alpha = 0.7) +
+    scale_color_manual(
+      values = c(
+        "Both (TP)" = "#2ca02c",
+        "Predicted only (FP)" = "#ff7f0e",
+        "Observed only (FN)" = "#d62728",
+        "No fishing (TN)" = "#7e7e7e"
+      ),
+      labels = function(x) {
+        counts <- table(merged_data$category[merged_data$category %in% x])
+        paste0(x, " (n=", counts[x], ")")
+      }
+    ) +
+    labs(
+      title = "Spatial Agreement: Predictions vs Observations",
+      x = "Longitude",
+      y = "Latitude",
+      color = "Category"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(face = "bold"),
+      legend.position = "right"
+    )
+  
+  # Combine plots
+  combined <- grid.arrange(p1, p2, p3, 
+                          layout_matrix = rbind(c(1, 2), c(3, 3)),
+                          heights = c(1, 1.2))
+  
+  ggsave(save_path, combined, width = 16, height = 12, dpi = 300)
+  cat(sprintf("Saved spatial comparison plot to %s\n", save_path))
+}
+
+```
+
+
+Metrics 
+
+```{r}
+plot_metrics_summary <- function(metrics, save_path = 'figs/metrics_summary.png') {
+  # Metrics bar plot
+  metrics_df <- data.frame(
+    Metric = c("Accuracy", "Precision", "Recall", "F1 Score", "Specificity"),
+    Value = c(metrics$accuracy, metrics$precision, metrics$recall, 
+              metrics$f1, metrics$specificity)
+  )
+  
+  p1 <- ggplot(metrics_df, aes(x = reorder(Metric, Value), y = Value, fill = Metric)) +
+    geom_col(show.legend = FALSE) +
+    geom_text(aes(label = sprintf("%.3f", Value)), hjust = -0.1, size = 3.5) +
+    coord_flip() +
+    ylim(0, 1.1) +
+    scale_fill_brewer(palette = "Set2") +
+    labs(
+      title = "Validation Metrics",
+      x = "",
+      y = "Score"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(face = "bold", size = 14),
+      axis.text = element_text(size = 11)
+    )
+  
+  # Confusion matrix breakdown
+  cm_df <- data.frame(
+    Category = c("True\nNegatives", "False\nPositives", "False\nNegatives", "True\nPositives"),
+    Count = c(metrics$tn, metrics$fp, metrics$fn, metrics$tp),
+    Color = c("#2ca02c", "#ff7f0e", "#d62728", "#1f77b4")
+  )
+  
+  p2 <- ggplot(cm_df, aes(x = Category, y = Count, fill = Color)) +
+    geom_col(show.legend = FALSE) +
+    geom_text(aes(label = format(Count, big.mark = ",")), vjust = -0.5, size = 3.5) +
+    scale_fill_identity() +
+    labs(
+      title = "Confusion Matrix Breakdown",
+      x = "",
+      y = "Count"
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(face = "bold", size = 14),
+      axis.text = element_text(size = 11)
+    )
+  
+  # Combine plots
+  combined <- grid.arrange(p1, p2, ncol = 2)
+  
+  ggsave(save_path, combined, width = 14, height = 5, dpi = 300)
+  cat(sprintf("Saved metrics summary plot to %s\n", save_path))
+}
+```
+
+Results
+
+```{r}
+export_results <- function(merged_data, metrics) {
+  # Create results directory
+  if (!dir.exists('results')) {
+    dir.create('results')
+  }
+  
+  # Export merged data with agreement categories
+  merged_export <- merged_data %>%
+    mutate(
+      agreement = case_when(
+        predicted == 1 & observed == 1 ~ "TP",
+        predicted == 1 & observed == 0 ~ "FP",
+        predicted == 0 & observed == 1 ~ "FN",
+        predicted == 0 & observed == 0 ~ "TN"
+      )
+    )
+  
+  write_csv(merged_export, 'results/validation_results.csv')
+  cat("\nExported detailed results to results/validation_results.csv\n")
+  
+  # Export metrics summary
+  metrics_summary <- data.frame(
+    Metric = c("Accuracy", "Precision", "Recall", "F1_Score", "Specificity",
+               "True_Positives", "True_Negatives", "False_Positives", "False_Negatives"),
+    Value = c(metrics$accuracy, metrics$precision, metrics$recall, metrics$f1,
+              metrics$specificity, metrics$tp, metrics$tn, metrics$fp, metrics$fn)
+  )
+  
+  write_csv(metrics_summary, 'results/metrics_summary.csv')
+  cat("Exported metrics summary to results/metrics_summary.csv\n")
+}
+```
+
+Run functions
+
+```{r}
+main <- function() {
+  # Create output directories
+  if (!dir.exists('figs')) {
+    dir.create('figs')
+  }
+  if (!dir.exists('results')) {
+    dir.create('results')
+  }
+  
+  # Load data
+  data <- load_data()
+  
+  # Create study area grid
+  study_grid <- create_study_area_grid()
+  
+  # Merge datasets
+  merged_data <- merge_datasets(data$predictions, data$s1_detections, study_grid)
+  
+  # Calculate metrics
+  metrics <- calculate_metrics(merged_data)
+  
+  # Create visualizations
+  cat("\nGenerating visualizations...\n")
+  plot_confusion_matrix(metrics$confusion_matrix)
+  plot_spatial_comparison(merged_data)
+  plot_metrics_summary(metrics)
+  
+  # Export results
+  export_results(merged_data, metrics)
+  
+  cat("\n============================================================\n")
+  cat("VALIDATION ANALYSIS COMPLETE\n")
+  cat("============================================================\n\n")
+  cat("Output files created:\n")
+  cat("  - figs/confusion_matrix.png\n")
+  cat("  - figs/spatial_comparison.png\n")
+  cat("  - figs/metrics_summary.png\n")
+  cat("  - results/validation_results.csv\n")
+  cat("  - results/metrics_summary.csv\n")
+}
+
+# Run main function
+main()
+
+```
+
+Calculate balanced accuracy
+
+```{r}
+metrics_summary <- read.csv("results/metrics_summary.csv")
+
+validation_results <- read.csv("results/validation_results.csv")
+
+# balanced accuracy = (Sensitivity + Specificity)/2 = (TP/(TP+FN) + TN/(TN+FP))/2
+
+TP <- metrics_summary %>% filter(Metric == "True_Positives") %>% pull(Value)
+
+TN <- metrics_summary %>% filter(Metric == "True_Negatives") %>% pull(Value)
+
+FN <- metrics_summary %>% filter(Metric == "False_Negatives") %>% pull(Value)
+
+FP <- metrics_summary %>% filter(Metric == "False_Positives") %>% pull(Value)
+
+balanced_accuracy = ((TP/(TP+FN)) + (TN/(TN+FP)))/2 # 0.65
+
+mcc_num <- TP*TN - FP*FN
+mcc_den <- sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))
+mcc <- mcc_num / mcc_den
+mcc # 0.344
+
+study_area <- read_csv(here('data/validation/paolo_study_area_1deg.csv'), show_col_types = FALSE)
+
+p2 <- study_area %>%
+    ggplot(aes(x = lon, y = lat)) +
+    geom_point(color = "red", size = 0.5, alpha = 0.6) +
+    labs(
+      title = "Study area",
+      x = "Longitude",
+      y = "Latitude"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(face = "bold"))
+
+```
+

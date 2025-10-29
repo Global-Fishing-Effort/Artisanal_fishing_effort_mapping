@@ -1,0 +1,167 @@
+---
+title: "Aggregate vessel data, match to EEZs, and calculate response variable for model"
+output: html_document
+date: "2025-07-22"
+---
+
+## Summary
+
+Here we aggregate the Skylight data to 0.5 by 0.5 degree, matching our analysis grid
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(here)
+library(tidyverse)
+library(terra)
+library(dplyr)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(qs)
+library(janitor)
+library(glue)
+
+source(here("R/dir.R"))
+
+data_grid_raw <- read.csv(here("data/model_features/global_grid.csv"))
+
+data_grid <- data_grid_raw %>%
+  st_drop_geometry() %>%
+  dplyr::select(pixel_id, lon, lat)
+```
+
+Read in vessel detection data with overpass information that we prepped 
+
+```{r}
+vessels_raw <- lapply(list.files(here("data/detections_looks/"), full.names = TRUE), qread) %>%
+  bind_rows() %>%
+  group_by(lat, lon, pixel_id, year, length_category = length_class) %>%
+  summarise(D = sum(D, na.rm = TRUE),
+            looks = sum(looks, na.rm = TRUE)) %>%
+  ungroup()
+
+test <- vessels_raw %>%
+  filter(year == 2021) %>%
+  distinct(lon, lat, looks) %>%
+  rast(., type = "xyz")
+plot(test) # looks good 
+
+```
+
+Read in raw Rousseau country level data
+
+```{r}
+# codes used in rousseau et al
+country_codes <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv")
+
+# country level effort data
+rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FishingCountry_LengthBoat_Gear_Sector.csv") %>%
+  filter(!is.na(Length_Category)) %>%
+  dplyr::select(-X) %>%
+  clean_names()
+```
+
+
+Figure out the flag country of each detection. We are assuming that the EEZ the vessel is fishing in is its flag country. 
+
+         - “We make the reasonable assumption that the small-scale fishing sub-sector only operates within domestic waters (i.e., in their nation’s EEZ, <200 NM from shore). There are a few exceptions to this assumption, however, the total value of fish caught by this sub-sector in non-domestic waters is negligible [32].” https://www.sciencedirect.com/science/article/pii/S0308597X23001380 
+         
+         
+```{r}
+test <- vessels_raw %>%
+  filter(is.na(pixel_id)) # make sure no NAs
+
+
+# read in EEZ data 
+eez_lookup <- read.csv(here("data/model_features/eez/eez_lookup_fix.csv"))
+eez_df <- read.csv(here("data/model_features/eez/eez_fix.csv")) %>%
+  left_join(eez_lookup)
+
+
+vessel_agg_5_flag <- vessels_raw %>%
+  left_join(eez_df) %>%
+  mutate(flag_fin = eez_sovereign) # assume flag country = eez country
+
+length(unique(vessel_agg_5_flag$eez_id)) # 171 flags
+
+# fix hong kong cell to be only hong kong
+test_hkg <- vessel_agg_5_flag %>%
+  filter(pixel_id == 120609) %>%
+  filter(eez_sovereign == "HKG")
+
+vessel_agg_5_flag_fix <- vessel_agg_5_flag %>%
+  filter(pixel_id != 120609) %>%
+  rbind(., test_hkg) %>%
+      dplyr::group_by(
+      pixel_id, lon, lat,
+      flag_fin, length_category,
+      year
+    ) %>%
+  summarise(D = sum(D, na.rm = TRUE),
+            looks = sum(looks, na.rm = TRUE)) %>%
+  mutate(r = D/looks,
+         presence = case_when(D > 0 ~ 1, 
+                              D == 0 & looks > 0 ~ 0,
+                              TRUE ~ NA)) 
+
+test <- vessel_agg_5_flag_fix %>%
+  filter(is.na(r))
+
+qs::qsave(vessel_agg_5_flag_fix, here("data/vessels/vessels_prop_05_deg_overpass_all.qs"))
+
+```
+
+Here is how we will model, so we need to prep the data this way
+ 
+```{r}
+# --- 3) STAGE 1 (presence) on coverage only ----------------------------------
+# Label presence on cells where we actually looked; absences are D==0 & looks>0
+
+# Fit Stage 1 with case weights = looks (optional):
+# ranger::ranger(presence ~ predictors..., data = stage1,
+#                probability = TRUE, case.weights = stage1$looks)
+# We just need to expand stage 1 to model on cells where the satellites sample. So presence will be presence and absence will only be in cells where presence = 0 and looks > 0. And we weight by the number of looks. We will also add looks as a predictor. 
+
+# --- 4) STAGE 2 (conditional intensity) on positives only --------------------
+# Target is r_plus = D / looks, defined only when D > 0 and looks > 0
+
+# Monthly training data (cell-month positives)
+# stage2_monthly <- agg_05[looks > 0 & D > 0,
+#                      .(lon, lat, length_class, month, year,
+#                        D, looks,
+#                        r_plus = D / looks)]
+# 
+# # Annual training data (aggregate positives within year)
+# stage2_annual <-  df %>%
+ #  group_by(lat, lon, pixel_id, year, length_category) %>%
+ #  mutate(r = D/looks,
+ #         presence = case_when(D > 0 ~ 1, 
+ #                              D == 0 & looks > 0 ~ 0,
+ #                              TRUE ~ NA)) 
+
+# eps <- 1e-6
+# a <- 0.5; b <- 0.5  # Jeffreys prior
+# 
+# # Build stage-2 training set from positives
+# stage2_train <- df %>%
+#   group_by(lat, lon, pixel_id, year, length_category) %>%
+#   summarise(D = sum(D), looks = sum(looks), .groups = "drop") %>%
+#   filter(D > 0, looks > 0) %>%
+#   mutate(
+#     r_raw = D / looks,
+#     r_shr = (D + a) / (looks + a + b),
+#     r_clipped = pmin(pmax(r_shr, eps), 1 - eps),
+#     y_logit = qlogis(r_clipped)
+#   ) %>%
+#   left_join(predictors_df, by = c("pixel_id","year","length_category"))  # your features
+
+# we also shrink r with jeffreys prior. This is necessary to do since r can be very noisy (high variance). A tiny bias toward the prior buys a big variance reduction where we need it most (places with low exposure). We don't want to model any true 0s. If targets are dominated by binomial noise (especially at low looks), the model overfits noise. Smoothing gives a “truer” signal, improving generalization and calibration of rhat. 
+
+
+# >>> Train Stage 2 on r_plus using only these rows (D>0). <<<
+# e.g., ranger::ranger(r_plus ~ predictors..., data = stage2_annual)
+# add looks as a predictor. 
+```
+

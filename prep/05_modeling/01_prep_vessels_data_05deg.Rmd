@@ -26,35 +26,34 @@ Read in the vessel detection data and combine/summarise per flag country, length
 
 ```{r}
 
-
-  # Load effort proportions
-  effort_props <- qread(here("data/vessels/vessels_prop_05_deg_sentinel.qs")) %>%
-    filter(nv > 0)
-
-  # Load effort proportions
-  effort_props_2 <- qread(here("data/vessels/vessels_prop_05_deg_skylight.qs")) %>%
-    filter(nv > 0)
-
-  
-  # Combine all data
-  year_data <- effort_props %>%
-    rbind(effort_props_2) %>%
-    mutate(sector = "Artisanal") %>% 
-    dplyr::group_by(
-      pixel_id, lon, lat,
-      flag_fin, length_category,
-      year
-    ) %>%
-    summarise(nv = sum(nv, na.rm = TRUE)) %>%
-    ungroup() %>%
-    group_by(flag_fin, year, length_category) %>%
-    mutate(total_nv = sum(nv)) %>%
-    ungroup() %>%
-    mutate(prop_vessels = nv/total_nv)
-
-  
-# Save prepared data
-saveRDS(year_data, here("data/model_features/prepared_data_0.5_all_skylight_sentinel.rds"))
+# 
+#   # Load effort proportions
+#   effort_props <- qread(here("data/vessels/vessels_prop_05_deg_sentinel.qs")) %>%
+#     filter(nv > 0)
+# 
+#   # Load effort proportions
+#   effort_props_2 <- qread(here("data/vessels/vessels_prop_05_deg_skylight.qs")) %>%
+#     filter(nv > 0)
+# 
+#   
+#   # Combine all data
+#   year_data <- effort_props %>%
+#     rbind(effort_props_2) %>%
+#     dplyr::group_by(
+#       pixel_id, lon, lat,
+#       flag_fin, length_category,
+#       year
+#     ) %>%
+#     summarise(nv = sum(nv, na.rm = TRUE)) %>%
+#     ungroup() %>%
+#     group_by(flag_fin, year, length_category) %>%
+#     mutate(total_nv = sum(nv)) %>%
+#     ungroup() %>%
+#     mutate(prop_vessels = nv/total_nv)
+# 
+#   
+# # Save prepared data
+# saveRDS(year_data, here("data/model_features/prepared_data_0.5_all_skylight_sentinel.rds"))
 
 ```
 

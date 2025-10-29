@@ -1,0 +1,290 @@
+---
+title: "Aggregate vessel and overpass data from Skylight"
+output: html_document
+date: "2025-07-22"
+---
+
+## Summary
+
+Here we aggregate Skylight data to 0.5 degree resolution and determine a proxy of overpasses from the images.csv files
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(here)
+library(tidyverse)
+library(terra)
+library(dplyr)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(qs)
+library(janitor)
+library(data.table)
+library(lwgeom)
+library(RANN) 
+
+source(here("R/dir.R"))
+
+data_grid_raw <- read.csv(here("data/model_features/global_grid.csv"))
+
+data_grid <- data_grid_raw %>%
+  st_drop_geometry() %>%
+  dplyr::select(pixel_id, lon, lat)
+
+vessels_final <- qs::qread(here("data/vessels/all_batch_lengths_year.qs"))
+```
+
+1. bin Skylight detections (using centroids) to 0.5° and counts D by (lon,lat,year,month,length_class),
+
+2. builds image polygons from image.csv (all batches),
+
+3. counts looks = unique images intersecting each 0.5° bin per month/year, and
+
+4. joins looks to detections to compute r = D/looks just like Sentinel-2.
+
+5. fills any remaining D>0 & looks==0 from the 8-nearest neighbors (0.5° queen’s neighborhood)
+
+6. Match to our data grid
+
+```{r}
+# =========================
+# 0) INPUTS / ASSUMPTIONS
+# =========================
+# - 'vessels_final' has: centroid_lon, centroid_lat, fname, timestamp or date, and either:
+#    vessel_length_m       (numeric; we’ll bin into length_class)
+# - image CSVs live at:
+#     file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_1/image.csv")
+#     file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_2/image.csv")
+#     file.path(rdsi_raw_dir, "minderoo_skylight/unzipped_3/image.csv")
+
+# =========================
+# 1) Detections -> 0.5° bins
+# =========================
+vf <- as.data.table(vessels_final)
+
+# Month/year (canonical YYYY-MM-01 in UTC)
+to_month <- function(x) format(as.POSIXct(x, tz = "UTC"), "%Y-%m-01")
+
+# choose timestamp column
+if ("timestamp" %in% names(vf)) {
+  vf[, ts := as.POSIXct(timestamp, tz = "UTC")]
+} else if ("date" %in% names(vf)) {
+  vf[, ts := as.POSIXct(date, tz = "UTC")]
+} else {
+  stop("vessels_final must contain 'timestamp' or 'date'.")
+}
+
+vf[, `:=`(month = to_month(ts), year = format(ts, "%Y"))]
+
+
+  # derive standard buckets
+  breaks <- c(-Inf, 6, 12, 24, 50, Inf)
+  labels <- c("Less than 6m","6-12","12-24","24-50","Over 50m")
+  vf[, length_class := cut(vessel_length_m, breaks = breaks, labels = labels, right = FALSE)]
+
+
+# 0.5° binning (lower-left edges; matches earlier binning)
+vf[, lon := -180 + floor((centroid_lon + 180) / 0.5) * 0.5 ]
+vf[, lat :=  -90 + floor((centroid_lat  +  90) / 0.5) * 0.5 ]
+
+vf <- vf %>%
+  filter(is_in_water == "True")
+
+# Aggregate detections per bin × month × length class
+agg_05_sky <- vf[
+  !is.na(lon) & !is.na(lat) & !is.na(length_class),
+  .(D = .N),
+  by = .(lon, lat, month, year, length_class)
+]
+
+# ==========================================
+# 2) Image polygons -> 0.5° looks per month
+# ==========================================
+# Read image files (keep required columns)
+img_paths <- file.path(rdsi_raw_dir, paste0("minderoo_skylight/unzipped_", 1:3), "image.csv")
+imgs_list <- lapply(img_paths, function(p) {
+  if (!file.exists(p)) return(NULL)
+  as.data.table(read.csv(p))
+})
+imgs_list <- Filter(Negate(is.null), imgs_list)
+keep_cols <- c("fname","wgs84_x1","wgs84_y1","wgs84_x2","wgs84_y2",
+               "wgs84_x3","wgs84_y3","wgs84_x4","wgs84_y4","timestamp")
+images_all <- rbindlist(lapply(imgs_list, function(dt) dt[, intersect(names(dt), keep_cols), with=FALSE]),
+                        use.names = TRUE, fill = TRUE)
+
+images_all <- images_all[timestamp != "unknown"]
+images_all[, ts := as.POSIXct(timestamp, tz = "UTC")]
+images_all[, `:=`(month = to_month(ts), year = format(ts, "%Y"))]
+
+# Row-wise polygons
+poly_list <- lapply(seq_len(nrow(images_all)), function(i) {
+  r <- images_all[i]
+  m <- matrix(c(r$wgs84_x1, r$wgs84_y1,
+                r$wgs84_x2, r$wgs84_y2,
+                r$wgs84_x3, r$wgs84_y3,
+                r$wgs84_x4, r$wgs84_y4,
+                r$wgs84_x1, r$wgs84_y1), ncol = 2, byrow = TRUE)
+  st_polygon(list(m))
+})
+img_sf <- st_sf(
+  fname = images_all$fname,
+  month = images_all$month,
+  year  = images_all$year,
+  geometry = st_sfc(poly_list, crs = 4326)
+) |>
+  st_make_valid() |>
+  st_buffer(1e-6)   # tiny buffer so edge-touching counts
+
+# Build a grid that covers BOTH detections and images
+pts_sf <- st_as_sf(unique(agg_05_sky[, .(lon, lat)]), coords = c("lon","lat"), crs = 4326, remove = FALSE)
+bbox_union <- st_bbox(st_union(st_as_sfc(st_bbox(img_sf)), st_as_sfc(st_bbox(pts_sf))))
+grid_sf <- st_make_grid(st_as_sfc(bbox_union), cellsize = c(0.5,0.5), what = "polygons", square = TRUE)
+grid_sf <- st_sf(geometry = grid_sf)
+
+# Bin labels via centroids using the SAME floor scheme
+cent <- st_coordinates(st_centroid(grid_sf))
+grid_sf$lon <- -180 + floor((cent[,1] + 180) / 0.5) * 0.5
+grid_sf$lat <-  -90 + floor((cent[,2] +  90) / 0.5) * 0.5
+
+# Intersections: unique images per cell × month
+ix <- st_intersects(grid_sf, img_sf)
+pairs <- data.table(
+  cell_row = rep.int(seq_len(nrow(grid_sf)), lengths(ix)),
+  img_row  = unlist(ix)
+)
+pairs[, `:=`(
+  lon   = grid_sf$lon[cell_row],
+  lat   = grid_sf$lat[cell_row],
+  month = img_sf$month[img_row],
+  year  = img_sf$year[img_row],
+  fname = img_sf$fname[img_row]
+)]
+pairs <- unique(pairs, by = c("lon","lat","month","year","fname"))
+
+looks_05 <- pairs[, .(looks = .N), by = .(lon, lat, month, year)]
+
+
+length_levels <- c("Less than 6m","6-12m","12-24m","24-50m","Over 50m")
+
+# Expand overpasses to all vessel length classes (effort is class-agnostic)
+looks_05_expand <- looks_05[, .(length_class = length_levels), by = .(lon, lat, month, year, looks)]
+
+# ====================================
+# 3) Join looks -> detections; compute r
+# ====================================
+setkey(agg_05_sky, lon, lat, month, year, length_class)
+setkey(looks_05,   lon, lat, month, year)
+
+agg_05_sky_new <- looks_05[agg_05_sky]    # left-join looks onto per-length rows
+agg_05_sky_new[is.na(looks), looks := 0L]
+
+agg_05_sky_new <- agg_05_sky %>%
+  full_join(looks_05_expand) %>%
+  mutate(D = ifelse(is.na(D), 0, D),
+         looks = ifelse(is.na(looks), 0, looks))
+
+sum(agg_05_sky_new$D, na.rm = TRUE) # 193600
+sum(agg_05_sky$D, na.rm = TRUE) # 193600
+
+## ok now we need to gapfill any of the cells which have 0 looks but detections. we will gapfill with the nearest neighbor cells looks fro the same month/year
+
+# Input: agg_05_sky_new with columns:
+# lon, lat, month, year, length_class, D, looks  (0.5° bins; month as "YYYY-MM-01")
+# helper
+wrap180 <- function(x) ((x + 180) %% 360) - 180
+
+# rows needing fill
+need <- unique(agg_05_sky_new[D > 0 & looks == 0, .(lon, lat, month, year)])
+
+  # length-agnostic lookup of looks
+  L <- unique(agg_05_sky_new[, .(lon, lat, month, year, looks)])
+  setkey(L, month, year, lon, lat)
+
+  # 8-neighbor offsets (queen)
+  offs <- CJ(dx = c(-0.5, 0, 0.5), dy = c(-0.5, 0, 0.5))[!(dx == 0 & dy == 0)]
+
+  # cross-join need × offs via a dummy key 'k'
+  need_nb <- need[, .(lon0 = lon, lat0 = lat, month, year)][, k := 1L]
+  offs[, k := 1L]
+  need_nb <- need_nb[offs, on = "k", allow.cartesian = TRUE][, k := NULL]
+
+  # compute neighbor coords
+  need_nb[, `:=`(
+    lon = wrap180(lon0 + dx),
+    lat =        (lat0 + dy)
+  )][, c("dx","dy") := NULL]
+
+  # join neighbor looks
+  nb <- L[need_nb, on = .(month, year, lon, lat)]
+
+  # max looks across neighbors (use median() if you prefer)
+  looks_fill <- nb[, .(looks_nb = suppressWarnings(max(looks, na.rm = TRUE))),
+                   by = .(lon0, lat0, month, year)]
+  looks_fill[is.infinite(looks_nb), looks_nb := NA_integer_]
+
+  # apply fills back to all length_class rows in that cell-month
+  setkey(looks_fill, lon0, lat0, month, year)
+  setkey(agg_05_sky_new, lon, lat, month, year)
+
+  agg_05_sky_new <- looks_fill[agg_05_sky_new]
+  agg_05_sky_new[
+    D > 0 & looks == 0,
+    looks := fifelse(!is.na(looks_nb) & looks_nb > 0, as.integer(looks_nb), 1L)
+  ]
+  agg_05_sky_new[, looks_nb := NULL]
+
+agg_05_sky_new <- agg_05_sky_new %>%
+  rename(lon = lon0, lat = lat0) %>%
+  left_join(data_grid)
+
+
+test <- agg_05_sky_new %>%
+  filter(is.na(pixel_id)) %>%
+  distinct(lon, lat) %>%
+  mutate(sample = 1) %>%
+  rast(., type = "xyz")
+
+plot(test) # cool this is the sampling area
+
+```
+
+Ok, after joining with data_grid, we see that some pixel_ids are NA. This is because they are all very close to the shore. So we need to assign these cells to the closest pixel_id. 
+
+```{r}
+
+# put your data in a data.table
+dt <- as.data.table(agg_05_sky_new)
+
+# indices of rows with/without pixel_id
+idx_missing <- which(is.na(dt$pixel_id))
+
+  known <- dt[!is.na(pixel_id), .(lon, lat, pixel_id)]
+  # build matrices of coordinates
+  known_xy <- as.matrix(known[, .(lon, lat)])
+  miss_xy  <- as.matrix(dt[idx_missing, .(lon, lat)])
+
+  # 1-nearest neighbor for each missing row
+  nn <- RANN::nn2(data = known_xy, query = miss_xy, k = 1)
+
+  # fill pixel_id from nearest known neighbor
+  dt[idx_missing, pixel_id := known$pixel_id[nn$nn.idx]]
+
+  # optional sanity check
+  message("NAs before: ", sum(is.na(agg_05_sky_new$pixel_id)),
+          " | NAs after: ", sum(is.na(dt$pixel_id)))
+
+# result in dt; if you want it back as data.frame:
+agg_05_sky_new_filled <- as.data.frame(dt) %>%
+  dplyr::select(-lon, -lat, -r) %>%
+  left_join(data_grid) %>%
+  group_by(lon, lat, pixel_id, year, length_class) %>%
+  summarise(D = sum(D, na.rm = TRUE), 
+            looks = sum(looks, na.rm = TRUE)) %>%
+  ungroup()
+
+qs::qsave(agg_05_sky_new_filled, here("data/detections_looks/skylight_detections_looks.qs"))
+
+```
+
+
