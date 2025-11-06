@@ -2,3 +2,4 @@
 .Rhistory
 .RData
 .Ruserdata
+data/validation/sentinel_1_prepped.csv

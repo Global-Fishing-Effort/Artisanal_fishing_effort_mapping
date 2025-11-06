@@ -180,6 +180,8 @@ pa <- ifel(count > 0, 1, NA)
 names(pa) <- "presence"
 writeRaster(pa, here("data/validation/s1_presence_1deg.tif"), overwrite = TRUE)
 
+# test <- rast(here("data/validation/s1_presence_1deg.tif"))
+
 pa_df <- pa %>%
   as.data.frame(., xy = TRUE) %>%
   rename(lon = x, lat = y) %>%
@@ -222,6 +224,9 @@ sa_r <- rasterize(vect(sa_00), grid, field=1, background=NA)  # 1 inside, NA out
 sa_r <- terra::mask(sa_r, grid)
 writeRaster(sa_r, here("data/validation/paolo_study_area_1deg.tif"), overwrite=TRUE)
 
+test <- rast(here("data/validation/paolo_study_area_1deg.tif"))
+  
+
 # save as data frame so we can filter our fishing data to these cells 
 sa_df <- sa_r %>%
   as.data.frame(., xy = TRUE) %>%
@@ -229,6 +234,26 @@ sa_df <- sa_r %>%
   left_join(., data_grid) # nice
 
 fwrite(sa_df, here("data/validation/paolo_study_area_1deg.csv"), row.names = FALSE)
+
+test <- read.csv(here("data/validation/paolo_study_area_1deg.csv"))
+ggplot(test, aes(x = lon, y = lat, fill = layer)) +
+    geom_raster(fill = "#1b9e77") +
+  coord_equal() + 
+    labs(
+      x = "Longitude",
+      y = "Latitude"
+    ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text = element_text(size = 10),
+    legend.position = "bottom",
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold")
+  )
+
+
+ggsave("figs/s1_study_area.png", dpi = 300)
+
   
 # read in industrial fishing data and filter for only study are cells
 

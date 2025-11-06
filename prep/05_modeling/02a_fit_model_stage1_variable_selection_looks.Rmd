@@ -76,8 +76,12 @@ model_data <- qread(here("data/vessels/vessels_prop_05_deg_overpass_all.qs")) %>
    crossing(., year = c(2009:2024)) 
   
   
+  mpa_data <- qs::qread(here("data/model_features/mpa/mpa_data_all.qs")) %>% 
+    filter(year >= 2009)
+  
   env_data <- spatial_data %>%
     left_join(ocean_data) %>% # cool.
+    left_join(mpa_data) %>%
     dplyr::select(-geometry_wkt) %>%
     left_join(elnino) %>%
     left_join(pdo) %>%
@@ -124,7 +128,9 @@ model_formula_rf <- formula(
     pdo_index_sd + 
     nearest_seamount_distance_m + 
     year + 
-    log_looks
+    log_looks + 
+    nearest_mpa_distance_m +
+    nearest_mpa_years_since_designation
 )
   
 
@@ -225,7 +231,7 @@ foreach(flag = flags_to_run, .packages = c("dplyr", "tidyr", "randomForest", "qs
     toc() # for timings
     
 
- # model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_25.qs")))
+ # model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/stage_1_models/pruning/stage_1_rf_train_{flag}_27.qs")))
 
       var_imp_i <- data.frame(importance(model))
   
@@ -297,7 +303,7 @@ foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glu
   test <- data_random_forest[-samp, ]
   
   ## if the file doesn't exist for some reason, run this. They should all be there from the previous chunk though.
-  if(!file.exists((glue(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_1_models/pruning/stage_1_rf_train_{flag}_25.qs"))))){
+  if(!file.exists((glue(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_1_models/pruning/stage_1_rf_train_{flag}_27.qs"))))){
     
         
     tic()
@@ -314,7 +320,7 @@ foreach(flag = flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glu
     toc()
   
   }else{ 
-    model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_1_models/pruning/stage_1_rf_train_{flag}_25.qs")))
+    model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_1_models/pruning/stage_1_rf_train_{flag}_27.qs")))
 }
   
   var_imp_i <- data.frame(importance(model)) %>%

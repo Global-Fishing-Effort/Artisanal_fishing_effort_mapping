@@ -95,9 +95,12 @@ ocean_data_historical <- qs::qread(here("data/int/prediction_historical_data/hal
  #   dplyr::select(lon, lat, sea_ice_present) %>%
  #   rast(., type = "xyz")
  #  plot(test_ice)
+ 
+   mpa_data <- qs::qread(here("data/model_features/mpa/mpa_data_all.qs")) 
   
   env_data <- spatial_data %>%
     left_join(ifa_df) %>%
+    left_join(mpa_data) %>%
     left_join(sea_ice_df) %>%
     left_join(ocean_data_all) %>% # cool.
     left_join(elnino) %>%
@@ -233,7 +236,6 @@ After the models are fit, we make predictions on ALL DATA. So stage 1 is in samp
  - Only takes ~7 mins with 40 cores
  
 ```{r}
-# 1967 WSM missing
 stage_1_path <- file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_1_models/")
 stage_1_files <- list.files(stage_1_path, full.names = TRUE)
 stage_1_flags <- unique(sub(".*stage_1_rf_model_full_data_([A-Z]{3})_.*", "\\1", stage_1_files))
@@ -265,7 +267,7 @@ registerDoParallel(cl)
    #   next()
    # }
 # 
-# flag = "WSM"
+# flag = "USA"
 # yr = 1967
 
 # get combination of categories we need to run through our models
@@ -388,14 +390,14 @@ if(nrow(all_preds) == 0){
   next()
 }
 
-# test_preds <- all_preds %>%
-#   dplyr::group_by(lon, lat) %>%
-#   summarise(nv = sum(nv, na.rm = TRUE)) %>%
-#   ungroup() %>%
-#   rast(., type = "xyz")
-# 
-# plot(test_preds)
-# plot(log(test_preds+1)) # Cool!
+test_preds <- all_preds %>%
+  dplyr::group_by(lon, lat) %>%
+  summarise(nv = sum(nv, na.rm = TRUE)) %>%
+  ungroup() %>%
+  rast(., type = "xyz")
+
+plot(test_preds)
+plot(log(test_preds+1)) # Cool!
 
 qs::qsave(all_preds, file.path(rdsi_dir, glue("prep/random_forest/artisanal_skylight_sentinel/predictions/yearly/model_preds_{flag}_{yr}.qs"))) # qs is smaller
 
