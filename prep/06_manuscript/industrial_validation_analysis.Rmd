@@ -13,6 +13,7 @@ library(tidyverse)
 library(caret)
 library(ggplot2)
 library(gridExtra)
+library(here)
 
 # Set plotting theme
 theme_set(theme_minimal())
@@ -211,59 +212,101 @@ plot_spatial_comparison <- function(merged_data, save_path = 'figs/spatial_compa
   p1 <- merged_data %>%
     filter(predicted == 1) %>%
     ggplot(aes(x = lon, y = lat)) +
-    geom_point(color = "blue", size = 0.5, alpha = 0.6) +
+    geom_point(color = "#2E2585", size = 0.5, alpha = 0.6) +
     labs(
-      title = "Model Predictions",
+      title = "A. Model Predictions",
       subtitle = sprintf("n = %d", sum(merged_data$predicted == 1)),
       x = "Longitude",
       y = "Latitude"
     ) +
     theme_minimal() +
-    theme(plot.title = element_text(face = "bold"))
+    theme(plot.title = element_text(face = "bold", size = 20), 
+              plot.subtitle = element_text(
+      size = 18),
+          # Axis titles
+    axis.title.x = element_text(size = 18),  # x-axis label
+    axis.title.y = element_text(size = 18),  # y-axis label
+
+    # Axis tick labels
+    axis.text.x  = element_text(size = 16),  # x tick text
+    axis.text.y  = element_text(size = 16))   # y tick text)
   
   # Plot 2: Observations
   p2 <- merged_data %>%
     filter(observed == 1) %>%
     ggplot(aes(x = lon, y = lat)) +
-    geom_point(color = "red", size = 0.5, alpha = 0.6) +
+    geom_point(color = "#C26D77", size = 0.5, alpha = 0.6) +
     labs(
-      title = "Sentinel-1 Detections",
+      title = "B. Sentinel-1 Detections",
       subtitle = sprintf("n = %d", sum(merged_data$observed == 1)),
       x = "Longitude",
       y = "Latitude"
     ) +
     theme_minimal() +
-    theme(plot.title = element_text(face = "bold"))
+    theme(plot.title = element_text(face = "bold", size = 20), 
+              plot.subtitle = element_text(
+      size = 18),
+          # Axis titles
+    axis.title.x = element_text(size = 18),  # x-axis label
+    axis.title.y = element_text(size = 18),  # y-axis label
+
+    # Axis tick labels
+    axis.text.x  = element_text(size = 16),  # x tick text
+    axis.text.y  = element_text(size = 16))   # y tick text)
   
-  # Plot 3: Agreement map
-  p3 <- merged_data %>%
-   # filter(category != "None") %>%
-    ggplot(aes(x = lon, y = lat, color = category)) +
-    geom_point(size = 1, alpha = 0.7) +
-    scale_color_manual(
-      values = c(
-        "Both (TP)" = "#2ca02c",
-        "Predicted only (FP)" = "#ff7f0e",
-        "Observed only (FN)" = "#d62728",
-        "No fishing (TN)" = "#7e7e7e"
-      ),
-      labels = function(x) {
-        counts <- table(merged_data$category[merged_data$category %in% x])
-        paste0(x, " (n=", counts[x], ")")
-      }
-    ) +
-    labs(
-      title = "Spatial Agreement: Predictions vs Observations",
-      x = "Longitude",
-      y = "Latitude",
-      color = "Category"
-    ) +
-    theme_minimal() +
-    theme(
-      plot.title = element_text(face = "bold"),
-      legend.position = "right"
+  cat_labs <- merged_data %>%
+  count(category) %>%
+  mutate(label = paste0(category, " \n(n=", n, ")"))
+
+  
+  lab_vec <- setNames(cat_labs$label, cat_labs$category)
+
+p3 <- merged_data %>%
+  ggplot(aes(x = lon, y = lat, color = category)) +
+  geom_point(size = 1, alpha = 0.7) +
+  scale_color_manual(
+    values = c(
+      "Both (TP)"          = "#337538",
+      "Predicted only (FP)" = "#DCCD7D",
+      "Observed only (FN)"  = "#C26D77",
+      "No fishing (TN)"     = "#DDDDDD"
+    ),
+    breaks = names(lab_vec),
+    labels = lab_vec
+  ) +
+  labs(
+    title = "C. Spatial Agreement: Predictions vs Observations",
+    x = "Longitude",
+    y = "Latitude",
+    color = "Category"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title   = element_text(face = "bold", size = 20),
+    axis.title.x = element_text(size = 18),
+    axis.title.y = element_text(size = 18),
+    axis.text.x  = element_text(size = 16),
+    axis.text.y  = element_text(size = 16),
+
+    legend.position    = "bottom",
+    legend.direction   = "horizontal",
+    legend.title       = element_text(size = 16, face = "bold"),
+    legend.text        = element_text(size = 16),
+    legend.key.width   = unit(1.6, "cm"),
+    legend.key.height  = unit(0.7, "cm"),
+    legend.spacing.x   = unit(0.6, "cm")
+  ) +
+  guides(
+    color = guide_legend(
+      nrow = 2,           # split legend into 2 rows -> less crowding
+      byrow = TRUE,
+      override.aes = list(
+        size  = 4.5,      # bigger legend symbols
+        alpha = 1
+      )
     )
-  
+  )
+
   # Combine plots
   combined <- grid.arrange(p1, p2, p3, 
                           layout_matrix = rbind(c(1, 2), c(3, 3)),
@@ -416,6 +459,174 @@ main <- function() {
 
 # Run main function
 main()
+
+```
+
+
+
+```{r}
+  # Load data
+  data <- load_data()
+  
+  # Create study area grid
+  study_grid <- create_study_area_grid()
+  
+  # Merge datasets
+  merged_data <- merge_datasets(data$predictions, data$s1_detections, study_grid)
+  
+    merged_data <- merged_data %>%
+    mutate(
+      category = case_when(
+        predicted == 1 & observed == 1 ~ "Both (TP)",
+        predicted == 1 & observed == 0 ~ "Predicted only (FP)",
+        predicted == 0 & observed == 1 ~ "Observed only (FN)",
+        TRUE ~ "No fishing (TN)"
+      )
+    )
+  
+  # Plot 1: Predictions
+  p1 <- merged_data %>%
+    filter(predicted == 1) %>%
+    ggplot(aes(x = lon, y = lat)) +
+    geom_point(color = "#2E2585", size = 0.5, alpha = 0.6) +
+    labs(
+      title = "A. Model Predictions",
+      subtitle = sprintf("n = %d", sum(merged_data$predicted == 1)),
+      x = "Longitude",
+      y = "Latitude"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(face = "bold", size = 20), 
+              plot.subtitle = element_text(
+      size = 18),
+          # Axis titles
+    axis.title.x = element_text(size = 18),  # x-axis label
+    axis.title.y = element_text(size = 18),  # y-axis label
+
+    # Axis tick labels
+    axis.text.x  = element_text(size = 16),  # x tick text
+    axis.text.y  = element_text(size = 16))   # y tick text)
+  
+  # Plot 2: Observations
+  p2 <- merged_data %>%
+    filter(observed == 1) %>%
+    ggplot(aes(x = lon, y = lat)) +
+    geom_point(color = "#C26D77", size = 0.5, alpha = 0.6) +
+    labs(
+      title = "B. Sentinel-1 Detections",
+      subtitle = sprintf("n = %d", sum(merged_data$observed == 1)),
+      x = "Longitude",
+      y = "Latitude"
+    ) +
+    theme_minimal() +
+    theme(plot.title = element_text(face = "bold", size = 20), 
+              plot.subtitle = element_text(
+      size = 18),
+          # Axis titles
+    axis.title.x = element_text(size = 18),  # x-axis label
+    axis.title.y = element_text(size = 18),  # y-axis label
+
+    # Axis tick labels
+    axis.text.x  = element_text(size = 16),  # x tick text
+    axis.text.y  = element_text(size = 16))   # y tick text)
+  
+  cat_labs <- merged_data %>%
+  count(category) %>%
+  mutate(label = paste0(category, " \n(n=", n, ")"))
+
+  
+  lab_vec <- setNames(cat_labs$label, cat_labs$category)
+
+p3 <- merged_data %>%
+  ggplot(aes(x = lon, y = lat, color = category)) +
+  geom_point(size = 1, alpha = 0.7) +
+  scale_color_manual(
+    values = c(
+      "Both (TP)"          = "#337538",
+      "Predicted only (FP)" = "#DCCD7D",
+      "Observed only (FN)"  = "#C26D77",
+      "No fishing (TN)"     = "#DDDDDD"
+    ),
+    breaks = names(lab_vec),
+    labels = lab_vec
+  ) +
+  labs(
+    title = "C. Spatial Agreement: Predicted vs Observed",
+    x = "Longitude",
+    y = "Latitude",
+    color = "Category"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title   = element_text(face = "bold", size = 20),
+    axis.title.x = element_text(size = 18),
+    axis.title.y = element_text(size = 18),
+    axis.text.x  = element_text(size = 16),
+    axis.text.y  = element_text(size = 16),
+
+    legend.position    = "bottom",
+    legend.direction   = "horizontal",
+    legend.title       = element_text(size = 16, face = "bold"),
+    legend.text        = element_text(size = 16),
+    legend.key.width   = unit(1.6, "cm"),
+    legend.key.height  = unit(0.7, "cm"),
+    legend.spacing.x   = unit(0.6, "cm")
+  ) +
+  guides(
+    color = guide_legend(
+      nrow = 2,           # split legend into 2 rows -> less crowding
+      byrow = TRUE,
+      override.aes = list(
+        size  = 4.5,      # bigger legend symbols
+        alpha = 1
+      )
+    )
+  )
+
+
+  metrics <- calculate_metrics(merged_data)
+
+  # Metrics bar plot
+  metrics_df <- data.frame(
+    Metric = c("Accuracy", "Precision", "Recall", "F1 Score", "Specificity"),
+    Value = c(metrics$accuracy, metrics$precision, metrics$recall, 
+              metrics$f1, metrics$specificity)
+  )
+ 
+cb_pal <- c(
+  "Accuracy"     = "#0072B2",  # blue
+  "Precision"    = "#E69F00",  # orange
+  "Recall"       = "#009E73",  # green
+  "F1 Score"     = "#CC79A7",  # purple/pink
+  "Specificity"  = "#D55E00"   # vermillion
+)
+
+p4 <- ggplot(metrics_df, aes(x = reorder(Metric, Value), y = Value, fill = Metric)) +
+  geom_col(show.legend = FALSE) +
+  geom_text(aes(label = sprintf("%.3f", Value)), hjust = -0.1, size = 3.5) +
+  coord_flip() +
+  ylim(0, 1.1) +
+  scale_fill_manual(values = cb_pal, drop = FALSE) +
+  labs(
+    title = "D. Validation Metrics",
+    x = "",
+    y = "Score"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title   = element_text(face = "bold", size = 20),
+    axis.title.x = element_text(size = 18),
+    axis.title.y = element_text(size = 18),
+    axis.text.x  = element_text(size = 16),
+    axis.text.y  = element_text(size = 16)
+  )
+
+  combined <- grid.arrange(
+  p1, p2, p3, p4,
+  ncol = 2, nrow = 2
+)
+  
+  ggsave(here("prep/06_manuscript/figs/validation_plot_combined.png"), combined, width = 16, height = 12, dpi = 300)
 
 ```
 

@@ -48,81 +48,11 @@ grid <- data_grid %>%
 
 ```
 
-ICCAT Sample fishing statistics and fish sizes
-
- - Catch and fishing effort statistics for each species by small area (1x1 degree squares for most gears, 5x5 degrees squares for longlines), gear, flag, and month. Task 2 data also include actual size frequencies of samples measured for each species by small area, gear, flag and month. In some cases, detailed size samples are also extrapolated to match total catches in order to be used in stock assessments. This includes the CATDIS and catch-at-size datasets. 
- 
- 
-I believe this data is catch and effort with sizes "1x1"   "5x5"   "10x20" "10x10" "5x10"  "none" 
-
-I think the first dataset will be most useful
-
-```{r}
-df <- mdb.get("/home/ubuntu/data_storage/raw_data/ICCAT/task_2_catch_effort/all_data_t2ce_20250131web.mdb")
-
-spatial_data <- df[[3]]
-
-# lets filter for 1x1 
-spat_df_1 <- spatial_data %>%
-  filter(SquareTypeCode == "1x1") %>% # most is 1x1, good
-  pivot_longer(values_to = "catch", cols = 20:54, names_to = "species") %>%
-  filter(CatchUnit == "kg")
-
-test_2023 <- spat_df_1 %>%
-#  filter(YearC == 2023) %>%
-  group_by(Lon, Lat) %>%
-  summarise(catch = sum(catch, na.rm = TRUE)) %>%
-  ungroup() 
-
-
-# 1. Get global land polygons (at medium resolution)
-land <- ne_countries(scale = "medium", returnclass = "sf")
-
-# Plot with coord_sf()
-p <- ggplot() +
-  geom_raster(data = test_2023, mapping = aes(Lon, Lat, fill = catch)) +
-  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1)
-
-p # ok, so it looks like mostly in North Atlantic (Norway, Denmark, etc), Meditteraen, and Indian ocean is reported. It probably varies each year. 
-
-# what about the longline reconstruction 
-
-ll_r <- read.csv("/home/ubuntu/data_storage/raw_data/ICCAT/longline_reconstruction/EFFDIS_LL2000-2023.csv")
-
-test <- ll_r %>%
-  group_by(xLon5, yLat5) %>%
-  summarise(eff = sum(ReportedEffort, na.rm = TRUE)) %>%
-  ungroup()
-
-ggplot() +
-  geom_raster(data = test, mapping = aes(xLon5, yLat5, fill = eff)) +
-  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1)
-# all of the atlantic, because the cells are so large. 
-
-# catch data raised to total landings at 5x5 degree
-
-all_catch <- read.csv("/home/ubuntu/data_storage/raw_data/ICCAT/cdis5023-all9sp.csv")
-
-test <- all_catch %>%
-  group_by(Lon5, Lat5) %>%
-  summarise(catch = sum(Catch_t)) %>%
-  ungroup()
-
-ggplot() +
-  geom_raster(data = test, mapping = aes(Lon5, Lat5, fill = catch)) +
-  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1) # ok this appears to be the same as the first data we read in, just aggregated to 5x5 and matched to total catch statistics? 
-
-# tropicals data from ICCAT
-trop_df <- read_xlsx("/home/ubuntu/data_storage/raw_data/ICCAT/task_2_catch_effort/tropical_fishery_t2ce_ETRO-PS1991-2023_bySchool_v1.xlsx", sheet = 2)
-# i have no idea what these columns mean...
-
-
-```
 
 GFW Sentinel 1 data
 
  - "We do not classify objects within 1 km of shore, because of ambiguous coastlines and rocks. Nor do we classify objects in much of the Arctic and Antarctic, where sea ice can create too many false positives; in both regions, however, vessel traffic is either very low (Antarctic) or in countries that have a high adoption of AIS (northern European or northern North American countries)."
- - 
+
 
 ```{r}
 ## read in and rasterize sentinel 1 data 
@@ -141,7 +71,10 @@ all_s1 <- lapply(list.files("/home/ubuntu/data_storage/raw_data/global_fishing_w
 qs::qsave(all_s1, file.path("/home/ubuntu/data_storage/raw_data/global_fishing_watch/sentinel_1_prepped.qs"))
 fwrite(all_s1, file.path("/home/ubuntu/data_storage/raw_data/global_fishing_watch/sentinel_1_prepped.csv"), row.names = FALSE)
 
+all_s1 <- fread(file.path("/home/ubuntu/data_storage/raw_data/global_fishing_watch/sentinel_1_prepped.csv"))
+
 test <- all_s1 %>%
+ filter(str_detect(timestamp, "2025")) %>%
   mutate(lon_1 = round(lon),
          lat_1 = round(lat)) %>%
   group_by(lon_1, lat_1) %>%
@@ -299,6 +232,77 @@ ind_fishing_prop_r <- ind_fishing_prop %>%
 
 writeRaster(ind_fishing_prop_r, here("data/validation/ind_fishing_s1_area_prop.tif"))
 
+
+
+```
+
+ICCAT Sample fishing statistics and fish sizes
+
+ - Catch and fishing effort statistics for each species by small area (1x1 degree squares for most gears, 5x5 degrees squares for longlines), gear, flag, and month. Task 2 data also include actual size frequencies of samples measured for each species by small area, gear, flag and month. In some cases, detailed size samples are also extrapolated to match total catches in order to be used in stock assessments. This includes the CATDIS and catch-at-size datasets. 
+ 
+ 
+I believe this data is catch and effort with sizes "1x1"   "5x5"   "10x20" "10x10" "5x10"  "none" 
+
+I think the first dataset will be most useful
+
+```{r}
+df <- mdb.get("/home/ubuntu/data_storage/raw_data/ICCAT/task_2_catch_effort/all_data_t2ce_20250131web.mdb")
+
+spatial_data <- df[[3]]
+
+# lets filter for 1x1 
+spat_df_1 <- spatial_data %>%
+  filter(SquareTypeCode == "1x1") %>% # most is 1x1, good
+  pivot_longer(values_to = "catch", cols = 20:54, names_to = "species") %>%
+  filter(CatchUnit == "kg")
+
+test_2023 <- spat_df_1 %>%
+#  filter(YearC == 2023) %>%
+  group_by(Lon, Lat) %>%
+  summarise(catch = sum(catch, na.rm = TRUE)) %>%
+  ungroup() 
+
+
+# 1. Get global land polygons (at medium resolution)
+land <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Plot with coord_sf()
+p <- ggplot() +
+  geom_raster(data = test_2023, mapping = aes(Lon, Lat, fill = catch)) +
+  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1)
+
+p # ok, so it looks like mostly in North Atlantic (Norway, Denmark, etc), Meditteraen, and Indian ocean is reported. It probably varies each year. 
+
+# what about the longline reconstruction 
+
+ll_r <- read.csv("/home/ubuntu/data_storage/raw_data/ICCAT/longline_reconstruction/EFFDIS_LL2000-2023.csv")
+
+test <- ll_r %>%
+  group_by(xLon5, yLat5) %>%
+  summarise(eff = sum(ReportedEffort, na.rm = TRUE)) %>%
+  ungroup()
+
+ggplot() +
+  geom_raster(data = test, mapping = aes(xLon5, yLat5, fill = eff)) +
+  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1)
+# all of the atlantic, because the cells are so large. 
+
+# catch data raised to total landings at 5x5 degree
+
+all_catch <- read.csv("/home/ubuntu/data_storage/raw_data/ICCAT/cdis5023-all9sp.csv")
+
+test <- all_catch %>%
+  group_by(Lon5, Lat5) %>%
+  summarise(catch = sum(Catch_t)) %>%
+  ungroup()
+
+ggplot() +
+  geom_raster(data = test, mapping = aes(Lon5, Lat5, fill = catch)) +
+  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1) # ok this appears to be the same as the first data we read in, just aggregated to 5x5 and matched to total catch statistics? 
+
+# tropicals data from ICCAT
+trop_df <- read_xlsx("/home/ubuntu/data_storage/raw_data/ICCAT/task_2_catch_effort/tropical_fishery_t2ce_ETRO-PS1991-2023_bySchool_v1.xlsx", sheet = 2)
+# i have no idea what these columns mean...
 
 
 ```
