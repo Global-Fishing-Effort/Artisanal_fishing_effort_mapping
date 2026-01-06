@@ -285,6 +285,25 @@ agg_05_sky_new_filled <- as.data.frame(dt) %>%
 
 qs::qsave(agg_05_sky_new_filled, here("data/detections_looks/skylight_detections_looks.qs"))
 
+
+test <- qread(here("data/detections_looks/skylight_detections_looks.qs")) %>%
+  group_by(year) %>%
+  summarise(looks = sum(looks, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(data = "skylight")
+
+files <- list.files(here("data/detections_looks/"), full.names = TRUE, pattern = "sentinel")
+
+test_looks <- lapply(files, qread) %>%
+  bind_rows() %>%
+  group_by(year) %>%
+  summarise(looks = sum(looks, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(data = "sentinel") %>%
+  rbind(test)
+
+# ok so looks are pretty consistent within each dataset. Skylight from 2009-2024 pretty consistent and sentinel from >2019 pretty consistent
+
 ```
 
 

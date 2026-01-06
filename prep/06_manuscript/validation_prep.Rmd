@@ -96,7 +96,7 @@ total <- global(count, "sum", na.rm = TRUE)
 prop_vessels_s1 <- count/3112487
 
 names(prop_vessels_s1) <- "proportion_vessels"
-writeRaster(pa, here("data/validation/s1_prop_vessels_1deg.tif"), overwrite = TRUE)
+#writeRaster(pa, here("data/validation/s1_prop_vessels_1deg.tif"), overwrite = TRUE)
 prop_vessels_s1_df <- prop_vessels_s1 %>%
   as.data.frame(., xy = TRUE) %>%
   rename(lon = x, lat = y) %>%
@@ -187,7 +187,8 @@ ggplot(test, aes(x = lon, y = lat, fill = layer)) +
 
 ggsave("figs/s1_study_area.png", dpi = 300)
 
-  
+sa_df <- fread(here("data/validation/paolo_study_area_1deg.csv"))
+
 # read in industrial fishing data and filter for only study are cells
 
 ind_fishing_full <- lapply(list.files("/home/ubuntu/data_storage/prep/random_forest/predictions", full.names = TRUE)[-148], qs::qread) %>%
@@ -233,8 +234,100 @@ ind_fishing_prop_r <- ind_fishing_prop %>%
 writeRaster(ind_fishing_prop_r, here("data/validation/ind_fishing_s1_area_prop.tif"))
 
 
+options(timeout = max(3600, getOption("timeout")))  # e.g. 1 hour
+
+## now we need to prep the same industrial data from Rousseau et al and do a validation that way
+rousseau_ind_2017 <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/effort_mapped/mapped_2017_I.csv")
+
+
+rousseau_grouped <- rousseau_ind_2017 %>%
+  group_by(lon = Lon, lat = Lat) %>%
+  summarise(nv = sum(NV, na.rm = TRUE)) %>%
+  ungroup()
+
+round_to_one <- function(x) {
+  round(x)
+}
+
+# Aggregate from 0.1 to 0.5 degree cells
+rousseau_agg_1 <- rousseau_grouped %>%
+  # Round coordinates to nearest 0.5 degree
+  mutate(
+    x_1 = round_to_one(lon),
+    y_1 = round_to_one(lat)
+  ) %>%
+  # Group by rounded coordinates and existing grouping variables
+  group_by(x_1, y_1) %>%
+  # Aggregate numeric columns
+  summarise(
+    nv = sum(nv, na.rm = TRUE) # Sum the vessel counts
+  ) %>%
+  ungroup() %>%
+  # Rename coordinates back to original names if needed
+  rename(lon = x_1, lat = y_1) %>%
+  as.data.table() %>%
+  left_join(data_grid)
+
+
+# split into known vs missing pixel_id
+known <- rousseau_agg_1 %>% filter(!is.na(pixel_id))
+miss  <- rousseau_agg_1 %>% filter(is.na(pixel_id))
+
+# make sf points and project to a metric CRS for nearest-neighbor distance
+known_sf <- st_as_sf(known, coords = c("lon", "lat"), crs = 4326) %>% st_transform(3857)
+miss_sf  <- st_as_sf(miss,  coords = c("lon", "lat"), crs = 4326) %>% st_transform(3857)
+
+# for each missing point, find index of nearest known point
+nn_idx <- st_nearest_feature(miss_sf, known_sf)
+
+# reassign missing pixel_ids
+rousseau_agg_1$pixel_id[is.na(rousseau_agg_1$pixel_id)] <- known$pixel_id[nn_idx]
+
+rousseau_agg_1 <- rousseau_agg_1 %>%
+  group_by(pixel_id) %>%
+  summarise(nv = sum(nv, na.rm = TRUE)) %>%
+  ungroup() %>%
+  left_join(data_grid)
+
+
+rs_fishing_s1_area <- rousseau_agg_1 %>%
+  filter(pixel_id %in% unique(sa_df$pixel_id))
+
+fwrite(rs_fishing_s1_area, here("data/validation/rousseau_fishing_s1_area.csv"), row.names = FALSE)
+
+
+rs_fishing_presence <- rs_fishing_s1_area %>%
+  filter(nv > 0) %>%
+  distinct(pixel_id, lon, lat) %>%
+  mutate(presence = 1)
+
+fwrite(rs_fishing_presence, here("data/validation/rousseau_fishing_s1_area_presence.csv"), row.names = FALSE)
+
+rs_fishing_presence_r <- rs_fishing_presence %>%
+  dplyr::select(-pixel_id) %>%
+  rast(., crs = crs(grid))
+
+writeRaster(rs_fishing_presence_r, here("data/validation/rousseau_fishing_s1_area_presence.tif"))
+
+rs_fishing_prop <- rs_fishing_s1_area %>%
+  filter(nv > 0) %>%
+  group_by(pixel_id, lon, lat) %>%
+  summarise(nv = sum(nv, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(total_nv = sum(nv, na.rm = TRUE)) %>%
+  mutate(prop_nv = nv/total_nv) %>%
+  dplyr::select(pixel_id, lon, lat, prop_nv)
+
+fwrite(rs_fishing_prop, here("data/validation/rousseau_fishing_s1_area_prop.csv"), row.names = FALSE)
+
+rs_fishing_prop_r <- rs_fishing_prop %>%
+  dplyr::select(-pixel_id) %>%
+  rast(., crs = crs(grid))
+
+writeRaster(rs_fishing_prop_r, here("data/validation/rousseau_fishing_s1_area_prop.tif"))
 
 ```
+
 
 ICCAT Sample fishing statistics and fish sizes
 

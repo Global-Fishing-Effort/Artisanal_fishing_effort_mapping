@@ -38,6 +38,9 @@ data_grid <- data.table::fread(here::here("data/model_features/global_grid.csv")
 
 Plot showing 2017 effort split by artisanal and industrial 
 
+ - make the map like this one from Kroodsma 2018: https://www.science.org/doi/10.1126/science.aao5646
+   - have panel A be top left big panel of all fishing effort, b trawlers (mid and bottom), c longline, d purse seine, e all other gears, f artisanal fishing 
+
 ```{r}
 
 ind_data <- fread("/home/ubuntu/data_storage/prep/random_forest/zenodo_data/mapped_industrial_effort_predictions_1950_2017.csv") %>%
@@ -148,6 +151,195 @@ ggsave(here("prep/06_manuscript/figs/fig2_effort_ind_art.png"), plot = p, width 
 
 
 ```
+
+```{r}
+
+# ----------------------------
+# 1) Read + filter to 2017
+# ----------------------------
+ind_all <- fread("/home/ubuntu/data_storage/prep/random_forest/zenodo_data/mapped_industrial_effort_predictions_1950_2017.csv") %>%
+  filter(year == 2017)
+
+art_all <- fread("/home/ubuntu/data_storage/prep/random_forest/zenodo_data/artisanal_skylight_sentinel/mapped_artisanal_effort_predictions_1950_2017.csv") %>%
+  filter(year == 2016)
+
+# Land polygons
+land <- ne_countries(scale = "medium", returnclass = "sf")
+
+# ----------------------------
+# 2) Your bins + colors (unchanged)
+# ----------------------------
+breaks_num <- c(0.02, 0.2, 2, 20, 200, 2000)
+labels     <- c("<0.02", "0.02-0.2", "0.2-2", "2-20", "20-200", "200-2000", ">2000")
+colors     <- c("#FFFFE4", "#EFF3FE", "#CADBEE", "#A8C9E0", "#E8F4A2", "#F1B16D", "#C54B53")
+names(colors) <- labels
+
+# ----------------------------
+# 3) Helper to summarise -> kW hours/km2 -> bin
+# ----------------------------
+summarise_eff <- function(df, title, gear_filter = NULL) {
+  d <- df
+  if (!is.null(gear_filter)) {
+    d <- gear_filter(d)
+  }
+
+  area <- d %>% distinct(lon, lat, pixel_area_km2)
+
+  out <- d %>%
+    group_by(lon, lat) %>%
+    summarise(nom_eff = sum(nom_active_fishing_hours, na.rm = TRUE), .groups = "drop") %>%
+    filter(nom_eff > 0) %>%
+    left_join(area, by = c("lon", "lat")) %>%
+    mutate(
+      eff_km2 = nom_eff / pixel_area_km2,
+      eff_bin = cut(
+        eff_km2,
+        breaks = c(-Inf, breaks_num, Inf),
+        labels = labels,
+        right = FALSE,
+        include.lowest = TRUE
+      ),
+      eff_bin = factor(eff_bin, levels = labels, ordered = TRUE),
+      panel = title
+    )
+
+  out
+}
+
+# ----------------------------
+# 4) Build panel datasets (A–F)
+# ----------------------------
+pA <- summarise_eff(ind_all, "A.  Industrial (Total)")
+
+pB <- summarise_eff(
+  ind_all, "B.  Industrial (Trawlers)",
+  gear_filter = function(d) d %>% filter(gear %in% c("Trawl_Bottom", "Trawl_Midwater_or_Unsp"))
+)
+
+pC <- summarise_eff(
+  ind_all, "C.  Industrial (Longlines)",
+  gear_filter = function(d) d %>% filter(gear == "Lines_Longlines")
+)
+
+pD <- summarise_eff(
+  ind_all, "D.  Industrial (Purse Seines)",
+  gear_filter = function(d) d %>% filter(gear == "Seine_Purse_Seine")
+)
+
+pE <- summarise_eff(
+  ind_all, "E.  Industrial (Other gears)",
+  gear_filter = function(d) d %>%
+    filter(!(gear %in% c("Seine_Purse_Seine", "Lines_Longlines", "Trawl_Bottom", "Trawl_Midwater_or_Unsp")))
+)
+
+pF <- summarise_eff(art_all, "F.  Artisanal (Total)")
+
+# Common extent across all panels
+pall <- bind_rows(pA, pB, pC, pD, pE, pF)
+
+xlims <- range(pall$lon, na.rm = TRUE)
+ylims <- range(pall$lat, na.rm = TRUE)
+
+# ----------------------------
+# 6) Patchwork layout like the example
+#    A spans top-left (2 cols x 2 rows)
+#    B/C/D stacked on the right
+#    Bottom row: F, E, D
+# ----------------------------
+# 1) A tighter, paper-style theme for maps
+theme_map_paper <- function(base_size = 11) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      # remove grid + all axis stuff
+      panel.grid      = element_blank(),
+      axis.title      = element_blank(),
+      axis.text       = element_blank(),
+      axis.ticks      = element_blank(),
+
+      # tighten spacing / margins
+      plot.margin     = margin(2, 2, 2, 2),
+      panel.spacing   = unit(2, "mm"),
+
+      # clean borders
+      panel.border    = element_rect(colour = "grey30", fill = NA, linewidth = 0.35),
+
+      # titles like the example (left aligned, bold)
+      plot.title      = element_text(face = "bold", size = 14, hjust = 0),
+
+      # legend
+      legend.position = "bottom",
+      legend.title    = element_text(face = "bold"),
+      legend.text     = element_text(size = 10),
+
+      # make legend keys a bit larger / more readable
+      legend.key.height = unit(5, "mm"),
+      legend.key.width  = unit(10, "mm")
+    )
+}
+
+# 2) Replace your panel_plot() with this version (same inputs)
+panel_plot <- function(pdat, show_legend = FALSE) {
+  ggplot() +
+    geom_raster(data = pdat, aes(lon, lat, fill = eff_bin)) +
+    geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.15) +
+    coord_sf(
+      crs = st_crs(4326),
+      xlim = xlims,
+      ylim = ylims,
+      expand = FALSE
+    ) +
+    scale_fill_manual(
+      values = colors,
+      drop = FALSE,
+      name = "Fishing Effort (kW hours/km²)",
+      guide = guide_legend(
+        nrow = 1,
+        byrow = TRUE,
+        title.position = "top",
+        title.hjust = 0.5
+      )
+    ) +
+    labs(title = unique(pdat$panel)) +
+    theme_map_paper() +
+    theme(
+      # only show legend on one panel (we'll collect later)
+      legend.position = if (show_legend) "bottom" else "none"
+    )
+}
+
+# 3) Rebuild panels (same as before, but now with upgraded styling)
+gA <- panel_plot(pA)
+gB <- panel_plot(pB)
+gC <- panel_plot(pC)
+gD <- panel_plot(pD, show_legend = TRUE)  # keep legend here so it gets collected
+gE <- panel_plot(pE)
+gF <- panel_plot(pF)
+
+# 4) Patchwork layout + collect legend + tighten whitespace a bit more
+design <- "
+AAB
+AAC
+DEF
+"
+
+p_final <- (gA + gB + gC + gF + gE + gD) +
+  plot_layout(design = design, guides = "collect") &
+  theme(
+    legend.position = "bottom",
+    # extra tightening at the combined-plot level
+    plot.margin   = margin(2, 2, 2, 2)
+  )
+
+# p_final
+
+ggsave(
+  here("prep/06_manuscript/figs/fig2_industrial_by_gear_plus_artisanal_2017.png"),
+  plot = p_final,
+  width = 14, height = 8, dpi = 600, bg = "white"
+)
+
+```
+
 
 ## Figure 3
 Plot showing 2017 maps comparing our results, AIS from GFW, and Rousseau et al. 2024
