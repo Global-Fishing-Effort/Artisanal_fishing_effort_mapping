@@ -163,7 +163,7 @@ calculate_metrics <- function(merged_data) {
 Confusion matrix
 
 ```{r}
-plot_confusion_matrix <- function(cm, save_path = ('figs/confusion_matrix.png')) {
+plot_confusion_matrix <- function(cm, save_path = ('figs/validation/confusion_matrix.png')) {
   cm_df <- as.data.frame(cm)
   colnames(cm_df) <- c("Observed", "Predicted", "Count")
   
@@ -196,7 +196,7 @@ plot_confusion_matrix <- function(cm, save_path = ('figs/confusion_matrix.png'))
 Spatial comparison
 
 ```{r}
-plot_spatial_comparison <- function(merged_data, save_path = 'figs/spatial_comparison.png') {
+plot_spatial_comparison <- function(merged_data, save_path = 'figs/validation/spatial_comparison.png') {
   # Create agreement categories
   merged_data <- merged_data %>%
     mutate(
@@ -322,7 +322,7 @@ p3 <- merged_data %>%
 Metrics 
 
 ```{r}
-plot_metrics_summary <- function(metrics, save_path = 'figs/metrics_summary.png') {
+plot_metrics_summary <- function(metrics, save_path = 'figs/validation/metrics_summary.png') {
   # Metrics bar plot
   metrics_df <- data.frame(
     Metric = c("Accuracy", "Precision", "Recall", "F1 Score", "Specificity"),
@@ -462,7 +462,7 @@ main()
 
 ```
 
-
+## Figure 4
 
 ```{r}
   # Load data
@@ -626,7 +626,7 @@ p4 <- ggplot(metrics_df, aes(x = reorder(Metric, Value), y = Value, fill = Metri
   ncol = 2, nrow = 2
 )
   
-  ggsave(here("prep/06_manuscript/figs/validation_plot_combined.png"), combined, width = 16, height = 12, dpi = 300)
+  ggsave(here("prep/06_manuscript/figs/fig4_validation_plot_combined.png"), combined, width = 16, height = 12, dpi = 300)
 
 ```
 
@@ -821,7 +821,7 @@ calculate_metrics <- function(merged_data) {
 Confusion matrix
 
 ```{r}
-plot_confusion_matrix <- function(cm, save_path = ('figs/confusion_matrix_rousseau.png')) {
+plot_confusion_matrix <- function(cm, save_path = ('figs/validation/confusion_matrix_rousseau.png')) {
   cm_df <- as.data.frame(cm)
   colnames(cm_df) <- c("Observed", "Modeled", "Count")
   
@@ -854,7 +854,7 @@ plot_confusion_matrix <- function(cm, save_path = ('figs/confusion_matrix_rousse
 Spatial comparison
 
 ```{r}
-plot_spatial_comparison <- function(merged_data, save_path = 'figs/spatial_comparison_rousseau.png') {
+plot_spatial_comparison <- function(merged_data, save_path = 'figs/validation/spatial_comparison_rousseau.png') {
   # Create agreement categories
   merged_data <- merged_data %>%
     mutate(
@@ -981,7 +981,7 @@ p3 <- merged_data %>%
 Metrics 
 
 ```{r}
-plot_metrics_summary <- function(metrics, save_path = 'figs/metrics_summary_rousseau.png') {
+plot_metrics_summary <- function(metrics, save_path = 'figs/validation/metrics_summary_rousseau.png') {
   # Metrics bar plot
   metrics_df <- data.frame(
     Metric = c("Accuracy", "Precision", "Recall", "F1 Score", "Specificity"),
@@ -1121,7 +1121,7 @@ main()
 
 ```
 
-
+## SI Figure 6
 
 ```{r}
   # Load data
@@ -1210,7 +1210,7 @@ p3 <- merged_data %>%
     labels = lab_vec
   ) +
   labs(
-    title = "C. Spatial Agreement: Predicted vs Observed",
+    title = "C. Spatial Agreement: Modeled vs Observed",
     x = "Longitude",
     y = "Latitude",
     color = "Category"
@@ -1285,6 +1285,6 @@ p4 <- ggplot(metrics_df, aes(x = reorder(Metric, Value), y = Value, fill = Metri
   ncol = 2, nrow = 2
 )
   
-  ggsave(here("prep/06_manuscript/figs/validation_plot_combined_rousseau.png"), combined, width = 16, height = 12, dpi = 300)
+  ggsave(here("prep/06_manuscript/figs/SI_fig4_validation_plot_combined_rousseau.png"), combined, width = 16, height = 12, dpi = 300)
 
 ```

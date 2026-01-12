@@ -184,7 +184,7 @@ ggplot(test, aes(x = lon, y = lat, fill = layer)) +
     plot.title = element_text(hjust = 0.5, size = 14, face = "bold")
   )
 
-
+#### SI Figure 5
 ggsave("figs/s1_study_area.png", dpi = 300)
 
 sa_df <- fread(here("data/validation/paolo_study_area_1deg.csv"))
