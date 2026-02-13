@@ -162,7 +162,7 @@ test <- vessels_final %>%
 # 1. Round centroid coordinates to any resolution you prefer
 cell_size <- 1 # You can change this to 1, 0.5, 0.01, 0.05, etc.
 
-vessel_batch_counts <- vessels_batch_df %>%
+vessel_batch_counts <- vessels_final %>%
   filter(is_in_water == "True") %>%
   mutate(
     lon_bin = floor(centroid_lon / cell_size) * cell_size,

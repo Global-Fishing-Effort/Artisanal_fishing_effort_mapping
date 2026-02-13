@@ -22,6 +22,7 @@ library(rnaturalearthdata)
 library(qs)
 library(janitor)
 library(glue)
+library(data.table)
 
 source(here("R/dir.R"))
 
@@ -101,6 +102,7 @@ vessel_agg_5_flag_fix <- vessel_agg_5_flag %>%
     ) %>%
   summarise(D = sum(D, na.rm = TRUE),
             looks = sum(looks, na.rm = TRUE)) %>%
+  ungroup() %>%
   mutate(r = D/looks,
          presence = case_when(D > 0 ~ 1, 
                               D == 0 & looks > 0 ~ 0,
@@ -109,59 +111,63 @@ vessel_agg_5_flag_fix <- vessel_agg_5_flag %>%
 test <- vessel_agg_5_flag_fix %>%
   filter(is.na(r))
 
-qs::qsave(vessel_agg_5_flag_fix, here("data/vessels/vessels_prop_05_deg_overpass_all.qs"))
-
 ```
 
-Here is how we will model, so we need to prep the data this way
- 
+Filter out vessel detections that are too big according to rousseau data
+
 ```{r}
-# --- 3) STAGE 1 (presence) on coverage only ----------------------------------
-# Label presence on cells where we actually looked; absences are D==0 & looks>0
+# all_vessels <- qread(here("data/vessels/vessels_prop_05_deg_overpass_all.qs"))
+sum(vessel_agg_5_flag_fix$D) # 40358849 this many detections before filtering
 
-# Fit Stage 1 with case weights = looks (optional):
-# ranger::ranger(presence ~ predictors..., data = stage1,
-#                probability = TRUE, case.weights = stage1$looks)
-# We just need to expand stage 1 to model on cells where the satellites sample. So presence will be presence and absence will only be in cells where presence = 0 and looks > 0. And we weight by the number of looks. We will also add looks as a predictor. 
+rousseau_df <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FGroup_FishingCountry_LengthBoat_Sector.csv") %>%
+  filter(Sector %in% c("APW", "UP"),
+         NV > 0) %>%
+  distinct(flag_fin = Country, length_category = Length_Category) # grab any definition of artisanal in each country since 1950
 
-# --- 4) STAGE 2 (conditional intensity) on positives only --------------------
-# Target is r_plus = D / looks, defined only when D > 0 and looks > 0
+filtered_df <- rousseau_df %>%
+  left_join(vessel_agg_5_flag_fix) # lose a lot of rows
 
-# Monthly training data (cell-month positives)
-# stage2_monthly <- agg_05[looks > 0 & D > 0,
-#                      .(lon, lat, length_class, month, year,
-#                        D, looks,
-#                        r_plus = D / looks)]
-# 
-# # Annual training data (aggregate positives within year)
-# stage2_annual <-  df %>%
- #  group_by(lat, lon, pixel_id, year, length_category) %>%
- #  mutate(r = D/looks,
- #         presence = case_when(D > 0 ~ 1, 
- #                              D == 0 & looks > 0 ~ 0,
- #                              TRUE ~ NA)) 
+sum(filtered_df$D) # 15692982; have only about 38% of the detections from before the filtering 
+15692982/40358849
 
-# eps <- 1e-6
-# a <- 0.5; b <- 0.5  # Jeffreys prior
-# 
-# # Build stage-2 training set from positives
-# stage2_train <- df %>%
-#   group_by(lat, lon, pixel_id, year, length_category) %>%
-#   summarise(D = sum(D), looks = sum(looks), .groups = "drop") %>%
-#   filter(D > 0, looks > 0) %>%
-#   mutate(
-#     r_raw = D / looks,
-#     r_shr = (D + a) / (looks + a + b),
-#     r_clipped = pmin(pmax(r_shr, eps), 1 - eps),
-#     y_logit = qlogis(r_clipped)
-#   ) %>%
-#   left_join(predictors_df, by = c("pixel_id","year","length_category"))  # your features
+test <- filtered_df %>%
+  filter(D > 0)
 
-# we also shrink r with jeffreys prior. This is necessary to do since r can be very noisy (high variance). A tiny bias toward the prior buys a big variance reduction where we need it most (places with low exposure). We don't want to model any true 0s. If targets are dominated by binomial noise (especially at low looks), the model overfits noise. Smoothing gives a “truer” signal, improving generalization and calibration of rhat. 
+missing <- setdiff(rousseau_df$flag_fin, test$flag_fin) #[1] "COK" "GUM" "TUV" "STP" "HTI" "KNA" "BEL"; ok missing these seven countries because we excluded categories. For these countries, lets see if they have detections pre exclusion, and if they do, we will use those detections to inform their models
+
+test2 <- vessel_agg_5_flag_fix %>%
+  filter(flag_fin %in% c(missing, "BRB")) %>%
+  filter(D > 0) %>%
+  group_by(flag_fin, length_category) %>%
+  summarise(D = sum(D)) %>%
+  ungroup() # ok we will use the next closest length category for the missing countries to inform the models. 
+
+unique(test2$flag_fin) # cool, there are detections now. Ok, now let's see if we can exclude any based on regional rules perhaps? 
 
 
-# >>> Train Stage 2 on r_plus using only these rows (D>0). <<<
-# e.g., ranger::ranger(r_plus ~ predictors..., data = stage2_annual)
-# add looks as a predictor. 
+fix_missing <- vessel_agg_5_flag_fix %>%
+    filter(flag_fin %in% c(missing, "BRB"), 
+           D > 0, 
+           length_category %in% c("12-24m"))
+
+filtered_df_fix <- filtered_df %>%
+  rbind(fix_missing) %>%
+        dplyr::group_by(
+      pixel_id, lon, lat,
+      flag_fin, length_category,
+      year
+    ) %>%
+  summarise(D = sum(D, na.rm = TRUE),
+            looks = sum(looks, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(r = D/looks,
+         presence = case_when(D > 0 ~ 1, 
+                              D == 0 & looks > 0 ~ 0,
+                              TRUE ~ NA)) 
+
+qs::qsave(filtered_df_fix, here("data/vessels/vessels_prop_05_deg_overpass_all.qs"))
+
+
+unique(filtered_df$flag_fin)
 ```
 

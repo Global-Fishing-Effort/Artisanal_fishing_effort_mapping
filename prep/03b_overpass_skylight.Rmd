@@ -80,7 +80,7 @@ vf[, `:=`(month = to_month(ts), year = format(ts, "%Y"))]
 
   # derive standard buckets
   breaks <- c(-Inf, 6, 12, 24, 50, Inf)
-  labels <- c("Less than 6m","6-12","12-24","24-50","Over 50m")
+  labels <- c("Less than 6m","6-12m","12-24m","24-50m","Over 50m")
   vf[, length_class := cut(vessel_length_m, breaks = breaks, labels = labels, right = FALSE)]
 
 
@@ -88,8 +88,8 @@ vf[, `:=`(month = to_month(ts), year = format(ts, "%Y"))]
 vf[, lon := -180 + floor((centroid_lon + 180) / 0.5) * 0.5 ]
 vf[, lat :=  -90 + floor((centroid_lat  +  90) / 0.5) * 0.5 ]
 
-vf <- vf %>%
-  filter(is_in_water == "True")
+# vf <- vf %>%
+#   filter(is_in_water == "True")
 
 # Aggregate detections per bin × month × length class
 agg_05_sky <- vf[
@@ -276,12 +276,13 @@ idx_missing <- which(is.na(dt$pixel_id))
 
 # result in dt; if you want it back as data.frame:
 agg_05_sky_new_filled <- as.data.frame(dt) %>%
-  dplyr::select(-lon, -lat, -r) %>%
+  dplyr::select(-lon, -lat) %>%
   left_join(data_grid) %>%
   group_by(lon, lat, pixel_id, year, length_class) %>%
   summarise(D = sum(D, na.rm = TRUE), 
             looks = sum(looks, na.rm = TRUE)) %>%
-  ungroup()
+  ungroup() %>%
+  mutate(year = as.numeric(year))
 
 qs::qsave(agg_05_sky_new_filled, here("data/detections_looks/skylight_detections_looks.qs"))
 

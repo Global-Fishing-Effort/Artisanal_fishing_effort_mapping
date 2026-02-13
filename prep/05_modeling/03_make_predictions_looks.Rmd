@@ -258,7 +258,7 @@ registerDoParallel(cl)
 
    
  # foreach(yr = years, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
-
+# flag = "BRB"
  for(yr in years) {
    
    ## uncheck this if you arent doing a full rerun 
@@ -390,14 +390,14 @@ if(nrow(all_preds) == 0){
   next()
 }
 
-test_preds <- all_preds %>%
-  dplyr::group_by(lon, lat) %>%
-  summarise(nv = sum(nv, na.rm = TRUE)) %>%
-  ungroup() %>%
-  rast(., type = "xyz")
-
-plot(test_preds)
-plot(log(test_preds+1)) # Cool!
+# test_preds <- all_preds %>%
+#   dplyr::group_by(lon, lat) %>%
+#   summarise(nv = sum(nv, na.rm = TRUE)) %>%
+#   ungroup() %>%
+#   rast(., type = "xyz")
+# 
+# plot(test_preds)
+# plot(log(test_preds+1)) # Cool!
 
 qs::qsave(all_preds, file.path(rdsi_dir, glue("prep/random_forest/artisanal_skylight_sentinel/predictions/yearly/model_preds_{flag}_{yr}.qs"))) # qs is smaller
 
@@ -426,7 +426,7 @@ cl <- makeCluster(40)  # could probably increase this?
 registerDoParallel(cl)
 
 foreach(flag = model_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
-  # flag = "USA"
+  # flag = "BRB"
   
   all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/predictions/yearly/"), pattern = flag, full.names = TRUE)
   
