@@ -494,7 +494,8 @@ mapped_2017_up <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2
 all_rousseau_2017_art <- # rbind(mapped_2017_apw, mapped_2017_up) %>%
   mapped_2017_apw %>%
   left_join(convert_fishing_hours) %>%
-  mutate(NomActiveHours = NomActive*mean)
+  mutate(NomActiveHours = NomActive*mean) %>%
+  dplyr::select(-V1)
 
 
 round_to_one <- function(x) {
@@ -977,7 +978,6 @@ ggplot() +
 ```
 
 
-
 ## Exploration
 
 Lets compare our artisanal modelling to Rousseau et al. artisanal data 
@@ -1026,3 +1026,231 @@ plot(test_rousseau, main = "Rousseau et al. 2019 effort")
 # interesting, looks pretty similar, however, ours is definitely 1) more concentrated, and 2) closer to shore. I am a little confused because presumably Watson (and by extension Rousseau) have the same <=50km or >=200m depth as us, but it looks like their artisnal goes out to the edge of EEZs (very low effort all the way out on the edge though). Just looking at unpowered looks a lot more similar.
 
 ```
+
+```{r}
+rousseau_effort <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/CapacityCountryLevel_Detailed.csv")
+
+ids <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv")
+
+test <- rousseau_effort %>%
+  filter(Country == "AUS") %>%
+  group_by(Country, Year, Length_Category) %>%
+  summarise(nom_eff = sum(NomActive, na.rm = TRUE),
+            nv = sum(NV, na.rm = TRUE)) %>%
+  ungroup()
+
+test <- rousseau_effort %>%
+  filter(Country == "AUS",
+         Year == 2017)
+
+
+test <- rousseau_effort %>%
+  filter(Year == 2017,
+         Country %in% c("AUS", "NZL")) %>%
+  group_by(Country) %>%
+  summarise(nom_eff = sum(NomActive, na.rm = TRUE)) %>%
+  ungroup()
+
+test %>%
+  filter(Country == "AUS") %>%
+  pull(nom_eff) # 340036707
+
+test %>%
+  filter(Country == "NZL") %>%
+  pull(nom_eff) # 32911763
+ 
+340036707/32911763 # 10.3
+
+
+## look at number of vessels? 
+test <- rousseau_effort %>%
+  filter(Year == 2013,
+         Country %in% c("AUS", "NZL")) %>%
+  group_by(Country, Sector) %>%
+  summarise(nom_eff = sum(NomActive, na.rm = TRUE),
+            nv = sum(NV, na.rm = TRUE)) %>%
+  ungroup()
+
+## read in only effort fished in Australia and NZL EEZ? 
+
+rousseau_ind_2017 <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/effort_mapped/mapped_2017_I.csv") %>%
+  dplyr::select(-V1)
+
+rousseau_artp_2017 <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/effort_mapped/mapped_2017_APW.csv") %>%
+  dplyr::select(-V1)
+
+rousseau_up_2017 <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/effort_mapped/mapped_2017_UP.csv") %>%
+  dplyr::select(-V1)
+
+cells_to_eez <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/CellstoLME_EEZ.csv") %>%
+  dplyr::select(-V1)
+
+all_df <- rbind(rousseau_up_2017, rousseau_artp_2017, rousseau_ind_2017) %>%
+  left_join(cells_to_eez)
+  
+
+aus_nzl_eez <- all_df %>% 
+  filter(EEZ %in% c("Australia", "New Zealand")) %>%
+  group_by(EEZ) %>%
+  summarise(nom_eff = sum(NomActive, na.rm = TRUE)) %>%
+  ungroup()
+
+aus_nzl_eez %>%
+  filter(EEZ == "Australia") %>%
+  pull(nom_eff) # 332977954
+
+aus_nzl_eez %>%
+  filter(EEZ == "New Zealand") %>%
+  pull(nom_eff) # 36967241
+
+332977954/36967241 # 9
+
+aus_nzl_eez_flag <- all_df %>% 
+  filter(EEZ %in% c("Australia", "New Zealand")) %>%
+  filter(SAUP %in% c(36, 554)) %>%
+  group_by(SAUP, EEZ) %>%
+  summarise(nom_eff = sum(NomActive, na.rm = TRUE)) %>%
+  ungroup() %>%
+  left_join(ids)
+
+aus_nzl_eez_flag %>%
+  filter(EEZ == "Australia", 
+         Country == "AUS") %>%
+  pull(nom_eff) # 311574210
+
+aus_nzl_eez_flag %>%
+  filter(EEZ == "New Zealand", 
+         Country == "NZL") %>%
+  pull(nom_eff) # 32381806
+
+311574210/32381806 # 9.6
+
+```
+
+Look at catch differences between NZL and AUS for 2017 from Watson data?
+
+```{r}
+
+catch <- fread("/home/ubuntu/data_storage/raw_data/fishing_effort_catch_from_gem/catch_histsoc_1869_2017_EEZ_addFAO.csv")
+
+aus_nzl_catch <- catch %>%
+  filter(Year == 2017,
+         FCountryName %in% c("Australia", "New_Zealand")) %>%
+  mutate(total_catch = Reported + IUU) %>%
+  group_by(Year, FCountryName, Sector) %>%
+  summarise(total_catch = sum(total_catch, na.rm = TRUE)) %>%
+  ungroup()
+
+```
+
+```{r}
+library(janitor)
+
+r_eff_new <- rousseau_effort %>%
+    filter(!is.na(Length_Category)) %>%
+  clean_names() %>%
+  group_by(flag_fin = country, length_category, year, sector) %>%
+  summarise(nom_active_days = sum(nom_active, na.rm = TRUE),
+            eff_active_days = sum(eff_active, na.rm = TRUE), 
+            nv = sum(nv, na.rm = TRUE),
+            p = sum(p),
+            gt = sum(gt)) %>%
+  ungroup() %>%
+  filter(nv > 0) %>%
+  mutate(days_at_sea = nom_active_days/p,
+         mean_engine_p = p/nv) 
+
+summary(r_eff_new)
+
+
+r_eff_new <- rousseau_effort %>%
+    filter(!is.na(Length_Category)) %>%
+  dplyr::select(-V1) %>%
+  clean_names() %>%
+  filter(nv > 0,
+       country %in% c("AUS", "NZL"),
+       year == 2017) %>%
+  mutate(days_at_sea = nom_active/p_active) 
+
+summary(r_eff_new)
+
+
+country_decomp <- r_eff_new %>%
+  group_by(country) %>%
+  summarise(
+    nom_eff_total = sum(nom_active, na.rm = TRUE),
+    nv_active_total = sum(nv_active, na.rm = TRUE),
+    p_active_total  = sum(p_active,  na.rm = TRUE),
+
+    # implied means
+    mean_power_per_active_vessel = p_active_total / nv_active_total,
+    mean_days_at_sea             = nom_eff_total / p_active_total,
+
+    # this should reconstruct nom_eff_total if the identity holds
+    reconstructed_nom_eff = nv_active_total *
+      mean_power_per_active_vessel *
+      mean_days_at_sea,
+
+    reconstruction_ratio = reconstructed_nom_eff / nom_eff_total,
+    .groups = "drop"
+  )
+
+country_decomp
+
+# AUS has a much larger active fleet (~6500 vessels in AUS vs 882 vessels in NZL)
+# AUS has a larger mean power per active vessel (258.3635) than NZL (186.6633)
+# AUS has a slightly higher mean days at sea (201.7238) than NZL (199)
+
+ratio_table <- country_decomp %>%
+  select(country, nom_eff_total, nv_active_total,
+         mean_power_per_active_vessel, mean_days_at_sea) %>%
+  tidyr::pivot_wider(names_from = country, values_from = everything()) %>%
+  mutate(
+    ratio_nom_eff = nom_eff_total_AUS / nom_eff_total_NZL,
+    ratio_nv      = nv_active_total_AUS / nv_active_total_NZL,
+    ratio_power   = mean_power_per_active_vessel_AUS / mean_power_per_active_vessel_NZL,
+    ratio_das     = mean_days_at_sea_AUS / mean_days_at_sea_NZL,
+
+    ratio_product = ratio_nv * ratio_power * ratio_das
+  )
+
+ratio_table
+
+# ratio_nv = 7.390663
+# ratio_power = 1.384115
+# ratio_das = 1.009995
+
+gear_totals <- r_eff_new %>%
+  group_by(country, gear) %>%
+  summarise(
+    nom_eff = sum(nom_active, na.rm = TRUE),
+    nv_act  = sum(nv_active, na.rm = TRUE),
+    p_act   = sum(p_active,  na.rm = TRUE),
+    mean_power = p_act / nv_act,
+    mean_das   = nom_eff / p_act,
+    .groups = "drop"
+  ) %>%
+  group_by(country) %>%
+  mutate(share_nom_eff = nom_eff / sum(nom_eff),
+         share_nv = nv_act/sum(nv_act)) %>%
+  ungroup() %>%
+  arrange(country, desc(nom_eff))
+
+# AUS: ~35% of AUS effort comes from midwater trawls, ~14% from Longlines, ~18% from "other", ~8% from handlines and poles, ~11% from seiners, ~6% gillnets, ~4% from pots and traps, ~2% from bottom trawl, ~1% dredges...
+# NZL: ~33% from midwater trawls, ~33% from gillnets, ~21% from Others, ~7.6% handlines and poles, ~4 from seiners, <1% from dredges
+
+gear_shares <- gear_totals %>%
+  select(country, gear, share_nom_eff) %>%
+  tidyr::pivot_wider(names_from = country, values_from = share_nom_eff)
+
+aus_total <- country_decomp %>% filter(country == "AUS") %>% pull(nom_eff_total)
+
+counterfactual_aus_by_gear <- gear_shares %>%
+  mutate(
+    aus_expected_if_nz_shares = aus_total * NZL
+  )
+counterfactual_aus_by_gear
+```
+
+
+

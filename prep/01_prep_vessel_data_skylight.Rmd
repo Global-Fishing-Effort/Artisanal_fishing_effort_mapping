@@ -159,6 +159,21 @@ test <- vessels_final %>%
   filter(vessel_length_m >= 50,
          is_in_water == "True") 
 
+test <- vessels_final %>%
+  distinct(centroid_lon, centroid_lat) %>%
+  mutate(n = 1) 
+
+options(pillar.sigfig = 12)  # or 15 if you want
+print(
+  vessels_final %>%
+    dplyr::select(fname, idx,
+                  pixel_x1:pixel_y4,
+                  wgs84_x1:wgs84_y4) %>%
+    dplyr::slice(1:3),
+  width = Inf
+)
+
+
 # 1. Round centroid coordinates to any resolution you prefer
 cell_size <- 1 # You can change this to 1, 0.5, 0.01, 0.05, etc.
 
@@ -211,7 +226,52 @@ vessel_binary <- classify(vessel_rast, rcl = matrix(c(-Inf, 0, NA, 0, Inf, 1), n
 plot(vessel_binary, main = "Vessel Detections", col = "red", legend = FALSE)
 plot(st_geometry(countries), add = TRUE, border = "black", lwd = 0.5)
 
+
+test <- rast(file.path("/home/ubuntu/data_storage/raw_data/minderoo_skylight/unzipped_1/vis/99.6223039_6.5630289.tif"))
+
+test
+
 ```
+
+check the resolution:
+
+```{r}
+library(dplyr)
+library(geosphere)
+
+vessels_final <- vessels_final %>%
+  mutate(
+    # pixel edge lengths
+    pix_12 = sqrt((pixel_x2 - pixel_x1)^2 + (pixel_y2 - pixel_y1)^2),
+    pix_23 = sqrt((pixel_x3 - pixel_x2)^2 + (pixel_y3 - pixel_y2)^2),
+    pix_34 = sqrt((pixel_x4 - pixel_x3)^2 + (pixel_y4 - pixel_y3)^2),
+    pix_41 = sqrt((pixel_x1 - pixel_x4)^2 + (pixel_y1 - pixel_y4)^2),
+
+    # ground edge lengths (meters)
+    m_12 = distHaversine(cbind(wgs84_x1, wgs84_y1), cbind(wgs84_x2, wgs84_y2)),
+    m_23 = distHaversine(cbind(wgs84_x2, wgs84_y2), cbind(wgs84_x3, wgs84_y3)),
+    m_34 = distHaversine(cbind(wgs84_x3, wgs84_y3), cbind(wgs84_x4, wgs84_y4)),
+    m_41 = distHaversine(cbind(wgs84_x4, wgs84_y4), cbind(wgs84_x1, wgs84_y1)),
+
+    # meters per pixel along each edge + average
+    mpp_12 = m_12 / pix_12,
+    mpp_23 = m_23 / pix_23,
+    mpp_34 = m_34 / pix_34,
+    mpp_41 = m_41 / pix_41,
+    mpp_avg = rowMeans(cbind(mpp_12, mpp_23, mpp_34, mpp_41), na.rm = TRUE)
+  )
+
+vessels_final %>%
+  summarise(
+    n = n(),
+    median_mpp = median(mpp_avg, na.rm = TRUE),
+    mean_mpp   = mean(mpp_avg, na.rm = TRUE),
+    p05 = quantile(mpp_avg, 0.05, na.rm = TRUE),
+    p95 = quantile(mpp_avg, 0.95, na.rm = TRUE)
+  )
+
+```
+
 
 
 Brainstorming: 

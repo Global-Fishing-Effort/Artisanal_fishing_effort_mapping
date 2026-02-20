@@ -445,3 +445,15 @@ tibble(
 
 ```
 
+Download AFMA logbook data: https://www.data.gov.au/data/dataset/summaries-of-afma-log-book-data-on-effort-distribution-for-commonwealth-fisheries-in-the-austra
+
+Sadly these download links are not working...
+
+```{r}
+auto_ll <- fread("https://www.cmar.csiro.au/geoserver/nerp/wms?service=WMS&version=1.1.0&request=GetMap&layers=nerp:csq_al_20112014&styles=&bbox=128.830001831055,-45.1450004577637,163.169998168945,-15.8549995422363&width=768&height=655&srs=EPSG:4326&format=application/openlayers")
+
+
+
+```
+
+
