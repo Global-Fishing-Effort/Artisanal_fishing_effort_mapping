@@ -15,6 +15,7 @@ Data sources:
  - GFW Sentinel-1 data (2017-present): https://globalfishingwatch.org/data-download/datasets/public-sar-vessel-detections%3Av20231026
  - Couce et al. 2020; Reconstructing three decades of total international trawling effort in the North Sea; https://essd.copernicus.org/articles/12/373/2020/; Trawling effort in North Sea from 1985-2015; https://data.cefas.co.uk/view/19722 
  - ICCAT data from sampling: https://www.iccat.int/en/accesingdb.HTML 
+ - AFMA data: https://www.data.gov.au/data/dataset/summaries-of-afma-log-book-data-on-effort-distribution-for-commonwealth-fisheries-in-the-austra
 
 
 ```{r setup, include=FALSE}
@@ -445,15 +446,621 @@ tibble(
 
 ```
 
-Download AFMA logbook data: https://www.data.gov.au/data/dataset/summaries-of-afma-log-book-data-on-effort-distribution-for-commonwealth-fisheries-in-the-austra
 
-Sadly these download links are not working...
+See if i can figure out how to grab data from AFMA logbooks: 
+https://www.data.gov.au/data/dataset/summaries-of-afma-log-book-data-on-effort-distribution-for-commonwealth-fisheries-in-the-austra
+
+
+
 
 ```{r}
-auto_ll <- fread("https://www.cmar.csiro.au/geoserver/nerp/wms?service=WMS&version=1.1.0&request=GetMap&layers=nerp:csq_al_20112014&styles=&bbox=128.830001831055,-45.1450004577637,163.169998168945,-15.8549995422363&width=768&height=655&srs=EPSG:4326&format=application/openlayers")
+library(xml2)
+library(httr2)
+library(stringr)
 
+test_layers <- layer_meta %>%
+  filter(str_detect(name, "nerp:sa_|nerp:nsw_state|nerp:nt_state|nerp:wa_state")) %>%
+  dplyr::select(name)
+
+# WFS capabilities
+wfs_resp <- request("https://www.cmar.csiro.au/geoserver/nerp/wfs") |>
+  req_url_query(service = "WFS", request = "GetCapabilities") |>
+  req_perform()
+
+cat(resp_status(wfs_resp), "\n")
+cat(substr(resp_body_string(wfs_resp), 1, 500))
+
+wfs_base <- "https://www.cmar.csiro.au/geoserver/nerp/wfs"
+
+# Get WFS capabilities
+wfs_resp <- request(wfs_base) |>
+  req_url_query(service = "WFS", request = "GetCapabilities") |>
+  req_perform()
+
+cap_xml <- read_xml(resp_body_string(wfs_resp))
+
+# Extract feature type names (namespace-agnostic)
+feature_names <- xml_find_all(cap_xml, "//*[local-name()='FeatureType']/*[local-name()='Name']") |>
+  xml_text()
+
+length(feature_names)
+head(feature_names, 50)
+
+# Search likely AFMA/logbook layers
+feature_names[str_detect(feature_names, regex("effort|nerp:sa_|nerp:nsw_state|nerp:nt_state|nerp:wa_state", ignore_case = TRUE))]
+
+layer_name <- "nerp:sa_traps_msf_2006_2010"
+
+u <- paste0(
+  "https://www.cmar.csiro.au/geoserver/nerp/wfs",
+  "?service=WFS",
+  "&version=2.0.0",
+  "&request=GetFeature",
+  "&typeNames=", URLencode(layer_name, reserved = TRUE),
+  "&outputFormat=application/json"
+)
+
+x_json <- st_read(u, quiet = TRUE) %>%
+  # filter(days_n > 0)
+  filter(trolling > 0)
+
+st_geometry_type(x_json) |> table()
+plot(x_json["trolling"])
+
+test <- x_json %>%
+  st_drop_geometry()
+
+
+# example: use 'days_n' as the raster value
+# convert sf -> terra vector
+v <- vect(x_json)
+
+# make a 1x1 degree template raster over the extent of the data
+r_template <- rast(
+  ext(v),
+  resolution = 1,
+  crs = "EPSG:4326"
+)
+
+# rasterize polygons to the template
+# (for polygon cells that align with the grid, this should be straightforward)
+r_days <- rasterize(v, r_template, field = "trolling")
+
+plot(r_days) # ok, so I could in theory compile all effort data into one dataset per each state? 
+
+feature_names[str_detect(feature_names, regex("effort", ignore_case = TRUE))]
+
+```
+
+```{r}
+library(strex)
+
+# Search likely AFMA/logbook layers
+layers <- feature_names[str_detect(feature_names, regex("effort|nerp:sa_|nerp:nsw_state|nerp:nt_state|nerp:wa_state", ignore_case = TRUE))]
+
+
+for(layer_name in layers){
+  
+ # layer_name <- "nerp:TASEffort_JIG"
+
+u <- paste0(
+  "https://www.cmar.csiro.au/geoserver/nerp/wfs",
+  "?service=WFS",
+  "&version=2.0.0",
+  "&request=GetFeature",
+  "&typeNames=", URLencode(layer_name, reserved = TRUE),
+  "&outputFormat=application/json"
+)
+
+if(str_detect(layer_name, "TASEffort")){
+  var_name <- tolower(str_after_last(layer_name, "_"))
+}else if(str_detect(layer_name, "qldeffort")){
+  var_name <- "days_n"
+}else if(str_detect(layer_name, "viceffort")){
+  var_name <- "hours"
+} else if(str_detect(layer_name, "nerp:nsw_state")){
+  var_name <- "fish_days"
+  var_name_2 <- "landings_k"
+}else if(str_detect(layer_name, "nerp:nt_state")){
+  var_name <- "average_days"
+}else if(str_detect(layer_name, "nerp:wa_state")){
+  var_name <- "days"
+  var_name_2 <- "vessel_cou"
+} else if(str_detect(layer_name, "_msf_")){
+  var_name <- "boat_days"
+  var_name_2 <- "whole_wt_k"
+}else if(str_detect(layer_name, "sa_prawn_")){
+  var_name <- "trawl_hours"
+  var_name_2 <- "weight_kg"
+}else if(str_detect(layer_name, "sa_rl_")){
+  var_name <- "pot_lifts"
+  var_name_2 <- "catch_weig"
+}else if(str_detect(layer_name, "sa_sardine")){
+  var_name <- "net_sets"
+  var_name_2 <- "estimated_"
+}else if(str_detect(layer_name, "sa_abalone_")){
+  var_name <- "days_fished"
+  var_name_2 <- "shell_weig"
+}
+
+if(layer_name %in% c("nerp:viceffort2011_bs_mn", "nerp:viceffort2011_ppwp_mn")){
+  var_name = "net_metres"
+}
+
+if(layer_name %in% c("nerp:viceffort2011_ppwp_purseseine", "nerp:viceffort2011_ppwp_seinenet")){
+  var_name = "shots"
+}
+
+
+if(layer_name %in% c("nerp:viceffort2011_rl_trappot")){
+  var_name = "days"
+}
+
+
+
+if(var_name == "lldl"){
+  
+  var_name <- "ll_dl"
+}else if(var_name == "gnmn"){
+  var_name <- "gn_mn"
+}
+
+x_json <- st_read(u, quiet = TRUE) %>%
+  filter(.data[[var_name]] > 0)
+
+
+if(nrow(x_json) == 0){
+  
+  next()
+}
+
+# plot(x_json[var_name])
+# sum(x_json$hours) # 20544.7
+
+# ensure lon/lat
+x_json <- st_transform(x_json, 4326)
+
+# use a representative point for each polygon
+pts <- st_point_on_surface(x_json)
+xy  <- st_coordinates(pts)
+
+x_json$lon_bin <- floor(xy[,1])   # 1-degree bins
+x_json$lat_bin <- floor(xy[,2])
+
+agg <- x_json %>%
+  st_drop_geometry() %>%
+  group_by(lon_bin, lat_bin) %>%
+  summarise(value = sum(.data[[var_name]], na.rm = TRUE), .groups = "drop")
+
+
+if(str_detect(layer_name, "nerp:wa_state|nerp:nsw_state|nerp:sa_")){
+  
+  agg2 <-  x_json %>%
+  st_drop_geometry() %>%
+  group_by(lon_bin, lat_bin) %>%
+  summarise(value = sum(.data[[var_name_2]], na.rm = TRUE), .groups = "drop")
+
+}
+
+# build 1-degree raster
+r_days <- rast(
+  xmin = min(agg$lon_bin),
+  xmax = max(agg$lon_bin) + 1,
+  ymin = min(agg$lat_bin),
+  ymax = max(agg$lat_bin) + 1,
+  resolution = 1,
+  crs = "EPSG:4326"
+)
+
+# write values at cell centers
+cell_xy <- cbind(agg$lon_bin + 0.5, agg$lat_bin + 0.5)
+cells <- cellFromXY(r_days, cell_xy)
+values(r_days)[cells] <- agg$value
+
+# plot(r_days)
+# sum(agg$value)                         # should match original sum
+# global(r_days, "sum", na.rm = TRUE)    # should also match
+# r_days 
+
+save_name <- str_after_first(layer_name, ":")
+
+names(r_days) <- layer_name
+
+writeRaster(r_days, here(glue("data/validation/afma_data/rasters/{save_name}_{var_name}.tif")), overwrite = TRUE)
+
+
+if(str_detect(layer_name, "nerp:wa_state|nerp:nsw_state|nerp:sa_")){
+  
+r_days <- rast(
+  xmin = min(agg$lon_bin),
+  xmax = max(agg$lon_bin) + 1,
+  ymin = min(agg$lat_bin),
+  ymax = max(agg$lat_bin) + 1,
+  resolution = 1,
+  crs = "EPSG:4326"
+)
+
+# write values at cell centers
+cell_xy <- cbind(agg2$lon_bin + 0.5, agg2$lat_bin + 0.5)
+cells <- cellFromXY(r_days, cell_xy)
+values(r_days)[cells] <- agg2$value
+
+names(r_days) <- layer_name
+
+save_name_2 <- str_after_first(layer_name, ":")
+
+writeRaster(r_days, here(glue("data/validation/afma_data/rasters/{save_name_2}_{var_name_2}.tif")), overwrite = TRUE)
+
+}
+
+}
+
+test <- rast(here("data/validation/afma_data/rasters/sa_handline_msf_2006_2010_boat_days.tif"))
+
+```
+
+```{r}
+
+rast_list <- list.files(here("data/validation/afma_data/rasters/"), full.names = TRUE)
+
+eff_df <- data.frame(x = NA, y = NA, pixel_id = NA, effort = NA, file = NA, layer_name = NA)
+
+for(r in rast_list){
+  
+  # r = rast_list[[1]]
+  r_eff <- rast(r) %>%
+    resample(., grid, method = "bilinear")
+  
+  lyr_nm <- names(r_eff)
+  
+  eff_df_new <- as.data.frame(r_eff, xy = TRUE) %>%
+    left_join(data_grid, by = c("x" = "lon", "y" = "lat")) %>%
+    rename(effort = 3) %>%
+    mutate(file = basename(r)) %>%
+    mutate(layer_name = lyr_nm)
+  
+  # test <- eff_df_new %>%
+  #   distinct(x, y, effort) %>%
+  #   rast(., type = "xyz")
+  
+  eff_df <- rbind(eff_df, eff_df_new) %>%
+    filter(!is.na(x))
+  
+}
+
+missing_df <- eff_df %>%
+  filter(is.na(pixel_id))
+
+
+# rows that need filling
+idx_missing <- which(is.na(missing_df$pixel_id))
+library(FNN)
+
+# nearest neighbor search: query = missing_df points, data = data_grid points
+nn <- get.knnx(
+  data = as.matrix(data_grid[, c("lon", "lat")]),
+  query = as.matrix(missing_df[idx_missing, c("x", "y")]),
+  k = 1
+)
+
+# assign nearest pixel_id
+missing_df$pixel_id[idx_missing] <- data_grid$pixel_id[nn$nn.index[, 1]]
+
+# optional: also keep distance (in degrees)
+missing_df$nn_dist_deg <- NA_real_
+missing_df$nn_dist_deg[idx_missing] <- nn$nn.dist[, 1]
+
+missing_df <- missing_df %>%
+  dplyr::select(pixel_id, effort, file, layer_name)
+
+new_eff_df <- eff_df %>%
+  filter(!is.na(pixel_id)) %>%
+  dplyr::select(pixel_id, effort, file, layer_name) %>%
+  rbind(., missing_df) %>%
+  group_by(pixel_id, file, layer_name) %>%
+  summarise(effort = sum(effort, na.rm = TRUE)) %>%
+  ungroup() %>%
+  left_join(data_grid) %>%
+  mutate(
+    effort_type = case_when(
+      
+      # TASEffort_<gearcode>_<effort>.tif
+      str_detect(file, "^TASEffort_") ~ 
+        str_match(file, "^TASEffort_[^_]+_(.+)\\.tif$")[,2],
+      
+      # viceffort2011_<...>_<effort>.tif
+      str_detect(file, "^viceffort2011_") ~ 
+        str_match(file, ".*_([^_]+)\\.tif$")[,2],
+      
+      # qldeffort_<...>_<effort>.tif
+      str_detect(file, "^qldeffort_") ~ 
+        str_match(file, ".*_([^_]+)\\.tif$")[,2],
+      
+      # sa_<fishery>_2006_2010_<effort>.tif or sa_<fishery>_2011_2015_<effort>.tif
+      str_detect(file, "^sa_") ~ 
+        str_match(file, "^sa_.*_\\d{4}_\\d{4}_(.+)\\.tif$")[,2],
+      
+      # nsw_state_fisheries_20112015_<effort>.tif
+      str_detect(file, "^nsw_state_fisheries_20112015_") ~ 
+        str_match(file, "^nsw_state_fisheries_20112015_(.+)\\.tif$")[,2],
+      
+      # wa_state_fisheries_20112015_<effort>.tif
+      str_detect(file, "^wa_state_fisheries_20112015_") ~ 
+        str_match(file, "^wa_state_fisheries_20112015_(.+)\\.tif$")[,2],
+      
+      # nt_state_fisheries_<fishery>_a7_<effort>.tif
+      str_detect(file, "^nt_state_fisheries_") ~ 
+        str_match(file, "^nt_state_fisheries_.*_a\\d+_(.+)\\.tif$")[,2],
+      
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  mutate(effort_type = ifelse(file == "nt_state_fisheriesmollusc_a9_average_days.tif", "average_days", effort_type)) %>%
+    mutate(effort_type = ifelse(effort_type == "n", "days_n", effort_type)) %>%
+    mutate(
+    effort_type_std = case_when(
+      str_detect(effort_type, "days") ~ "days",
+      str_detect(effort_type, "hours") ~ "hours",
+      str_detect(effort_type, "shots") ~ "shots",
+      str_detect(effort_type, "net_sets") ~ "net_sets",
+      str_detect(effort_type, "pot_lifts") ~ "pot_lifts",
+      str_detect(effort_type, "metres") ~ "net_metres",
+      str_detect(effort_type, "weig|weight|landings|whole_wt|shell_weig|estimated") ~ "catch_or_landings_kg",
+      str_detect(effort_type, "vessel_cou") ~ "vessel_count",
+      TRUE ~ effort_type
+    )
+  ) %>%
+  mutate(effort_type_std = ifelse(str_detect(file, "TASEffort"), "days", effort_type_std)) %>%
+  mutate(state = case_when(
+    str_detect(file, "TASEffort") ~ "Tasmania",
+    str_detect(file, "viceffort") ~ "Victoria",
+    str_detect(file, "qldeffort") ~ "Queensland",
+    str_detect(file, "sa_") ~ "South Australia", 
+    str_detect(file, "wa_state") ~ "Western Australia",
+    str_detect(file, "nt_state") ~ "Northern Territory",
+    str_detect(file, "nsw_") ~ "New South Wales"
+  )) %>%
+    mutate(
+    year = case_when(
+      
+      # TAS: no year in filename
+      str_detect(file, "^TASEffort_") ~ NA_character_,
+      
+      # NT: no year in filename
+      str_detect(file, "^nt_state_fisheries") ~ NA_character_,
+      
+      # SA: year range like 2006_2010 or 2011_2015
+      str_detect(file, "^sa_") ~ 
+        str_match(file, ".*_(\\d{4}_\\d{4})_.*\\.tif$")[,2],
+      
+      # VIC: single year like 2011
+      str_detect(file, "^viceffort") ~ 
+        str_match(file, "^viceffort(\\d{4})_.*\\.tif$")[,2],
+      
+      # QLD: single year like 2011
+      str_detect(file, "^qldeffort_") ~ 
+        str_match(file, ".*?(\\d{4})_.*\\.tif$")[,2],
+      
+      # NSW: compact year range 20112015
+      str_detect(file, "^nsw_state_fisheries_") ~ 
+        str_match(file, "^nsw_state_fisheries_(\\d{8})_.*\\.tif$")[,2],
+      
+      # WA: compact year range 20112015
+      str_detect(file, "^wa_state_fisheries_") ~ 
+        str_match(file, "^wa_state_fisheries_(\\d{8})_.*\\.tif$")[,2],
+      
+      TRUE ~ NA_character_
+    ),
+    
+    # optional: make the year formatting more readable/consistent
+    year = case_when(
+      year %in% c("20112015", "20062010") ~ paste0(substr(year, 1, 4), "-", substr(year, 5, 8)),
+      str_detect(year, "^\\d{4}_\\d{4}$") ~ str_replace(year, "_", "-"),
+      TRUE ~ year
+    )
+  ) %>%
+  mutate(effort = ifelse(effort_type_std == "hours", effort/24, effort)) %>%
+  mutate(effort_type_std = ifelse(effort_type_std == "hours", "days", effort_type_std))
+
+test <- new_eff_df %>%
+  distinct(file, effort_type_std)
+
+test <- new_eff_df %>%
+  distinct(file, year)
 
 
 ```
+
+See if we can find more info on exactly what this data is: 
+
+```{r}
+
+
+fts <- xml_find_all(cap_xml, "//*[local-name()='FeatureType']")
+
+layer_meta <- map_dfr(fts, function(ft) {
+  tibble(
+    name = xml_text(xml_find_first(ft, "./*[local-name()='Name']")),
+    title = xml_text(xml_find_first(ft, "./*[local-name()='Title']")),
+    abstract = xml_text(xml_find_first(ft, "./*[local-name()='Abstract']")),
+    default_crs = xml_text(xml_find_first(ft, "./*[local-name()='DefaultCRS'] | ./*[local-name()='DefaultSRS']")),
+    other_crs = paste(xml_text(xml_find_all(ft, "./*[local-name()='OtherCRS'] | ./*[local-name()='OtherSRS']")),
+                      collapse = "; "),
+    wgs84_bbox_lower = xml_text(xml_find_first(ft, ".//*[local-name()='WGS84BoundingBox']/*[local-name()='LowerCorner']")),
+    wgs84_bbox_upper = xml_text(xml_find_first(ft, ".//*[local-name()='WGS84BoundingBox']/*[local-name()='UpperCorner']"))
+  )
+})
+
+eff_meta <- layer_meta %>%
+  filter(str_detect(name, regex("effort|nsw_state|nt_state|wa_state|sa_", ignore_case = TRUE))) %>%
+  dplyr::select(layer_name = name, title)
+  # mutate(layer_name = str_after_first(file, "nerp:"))
+
+```
+
+Now join that back onto the data for better gear types
+
+```{r}
+new_eff_df_fin <- new_eff_df %>%
+  mutate(file = str_before_last(file, "\\.tif")) %>%
+  left_join(eff_meta)
+  
+extract_gear <- function(x) {
+  case_when(
+    
+    # -----------------------
+    # TAS titles
+    # -----------------------
+    str_detect(x, "^TAS Effort ") ~ 
+      str_remove(x, "^TAS Effort\\s+"),
+    
+    str_detect(x, "^TASEffort ") ~ 
+      str_remove(x, "^TASEffort\\s+"),
+    
+    # -----------------------
+    # VIC titles
+    # e.g. viceffort2011_bs_hl -> hl
+    #      viceffort2011_rl_trappot -> trappot
+    # -----------------------
+    str_detect(x, "^viceffort\\d+") ~ 
+      str_extract(x, "[^_]+$"),
+    
+    # -----------------------
+    # SA abalone / prawn / sardine / rock lobster
+    # e.g. SA Prawn 2011_2015 -> Prawn
+    #      SA Sardine_2006_2010 -> Sardine
+    #      SA Rock Lobster 2006_2010 -> Rock Lobster
+    # -----------------------
+    str_detect(x, "^SA[_ ]abalone") ~ 
+      "abalone",
+    
+    str_detect(x, "^SA Sardine") ~ 
+      "Sardine",
+    
+    str_detect(x, "^SA Prawn") ~ 
+      "Prawn",
+    
+    str_detect(x, "^SA Rock Lobster") ~ 
+      "Rock Lobster",
+    
+    # SA MSF-style names
+    # e.g. SA Line_msf 2006_2010 -> Line_msf
+    #      SA Traps_msf_2011_2015 -> Traps_msf
+    #      SA othergear_msf 2011_2015 -> othergear_msf
+    str_detect(x, "^SA ") & str_detect(x, "_msf") ~ 
+      str_extract(x, "[A-Za-z]+_msf"),
+    
+    # -----------------------
+    # NSW titles
+    # e.g. nsw_state_fisheries_20112015_ll_dl -> ll_dl
+    #      nsw_state_fisheries_20112015_seine_setnet -> seine_setnet
+    # -----------------------
+    str_detect(x, "^nsw_state_fisheries_\\d{8}_") ~ 
+      str_remove(x, "^nsw_state_fisheries_\\d{8}_"),
+    
+    # -----------------------
+    # WA titles
+    # e.g. wa_state_fisheries_20112015_gillnet -> gillnet
+    # -----------------------
+    str_detect(x, "^wa_state_fisheries_\\d{8}_") ~ 
+      str_remove(x, "^wa_state_fisheries_\\d{8}_"),
+    
+    # -----------------------
+    # QLD titles
+    # e.g. qldeffort_line2011 -> line
+    #      qld_effort_harvest2011 -> harvest
+    # -----------------------
+    str_detect(x, "^qld_?effort_?") ~ 
+      x %>%
+      str_remove("^qld_?effort_?") %>%
+      str_remove("\\d+$"),
+    
+    # -----------------------
+    # NT titles
+    # e.g. nt_state_fisheries_barramundi_a7 -> barramundi
+    #      nt_state_fisheries_offshore_net_and_line_a5 -> offshore_net_and_line
+    # -----------------------
+    str_detect(x, "^nt_state_fisheries") ~ 
+      x %>%
+      str_remove("^nt_state_fisheries_?") %>%
+      str_remove("_a\\d+$"),
+    
+    # fallback
+    TRUE ~ NA_character_
+  )
+}
+
+
+new_eff_df_fin <- new_eff_df_fin %>%
+  mutate(gear = extract_gear(title))
+
+test <-  new_eff_df_fin %>%
+  distinct(title, gear) %>%
+  arrange(title)
+
+fwrite(new_eff_df_fin, here("data/validation/afma_data/afma_eff_data_1deg.csv"))  # save data
+
+## lets take a look at all effort, excluding the ones that aren't categorized as days. 
+
+test <- new_eff_df_fin %>%
+  filter(effort_type_std == "days",
+         year %in% c(NA, "2011", "2011-2015"))
+
+test_r <- test %>%
+  group_by(lon, lat) %>%
+  summarise(effort = sum(effort, na.rm = TRUE)) %>%
+  ungroup() %>%
+  rast(., type = "xyz")
+
+plot(test_r)
+
+test <- new_eff_df_fin %>%
+  filter(effort_type_std == "vessel_count") %>%
+  group_by(lon, lat) %>%
+  summarise(n = sum(effort, na.rm = TRUE)) %>%
+  ungroup() %>%
+  rast(., type = "xyz")
+
+plot(test)
+```
+
+I would like to grab another layer and save it. The nerp:vesseldensity2015_finescale, i.e., "vesseldensity layers would be good. 
+
+ 
+```{r}
+
+library(httr2)
+library(xml2)
+library(sf)
+library(dplyr)
+
+wfs_base <- "https://www.cmar.csiro.au/geoserver/nerp/wfs"
+layer_name <- "nerp:vesseldensity2015_finescale"  # adjust to exact Name from capabilities
+
+# 1) What attributes does the layer have?
+desc <- request(wfs_base) |>
+  req_url_query(
+    service="WFS", version="2.0.0", request="DescribeFeatureType",
+    typeNames=layer_name
+  ) |>
+  req_perform() |>
+  resp_body_string()
+
+cat(substr(desc, 1, 800))
+
+# 2) Pull a small sample of features
+u <- paste0(
+  wfs_base,
+  "?service=WFS&version=2.0.0&request=GetFeature",
+  "&typeNames=", URLencode(layer_name, reserved = TRUE)
+)
+
+x <- st_read(u, quiet = TRUE)
+test <- st_drop_geometry(x)
+
+
+```
+ 
+
 
 

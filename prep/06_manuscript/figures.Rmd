@@ -65,9 +65,29 @@ land <- ne_countries(scale = "medium", returnclass = "sf")
 # ----------------------------
 # 2) Your bins + colors (unchanged)
 # ----------------------------
-breaks_num <- c(0.02, 0.2, 2, 20, 200, 2000)
-labels     <- c("<0.02", "0.02-0.2", "0.2-2", "2-20", "20-200", "200-2000", ">2000")
-colors     <- c("#FFFFE4", "#EFF3FE", "#CADBEE", "#A8C9E0", "#E8F4A2", "#F1B16D", "#C54B53")
+# breaks_num <- c(0.02, 0.2, 2, 20, 200, 2000)
+# labels     <- c("<0.02", "0.02-0.2", "0.2-2", "2-20", "20-200", "200-2000", ">2000")
+# colors     <- c("#FFFFE4", "#EFF3FE", "#CADBEE", "#A8C9E0", "#E8F4A2", "#F1B16D", "#C54B53")
+# names(colors) <- labels
+
+breaks_num <- c(0.02, 0.2, 2, 20, 200, 500, 2000)
+
+labels <- c(
+  "<0.02", "0.02-0.2", "0.2-2", "2-20",
+  "20-200", "200-500", "500-2000", ">2000"
+)
+
+colors <- c(
+  "#FFFFE4",  # <0.02
+  "#EFF3FE",  # 0.02-0.2
+  "#CADBEE",  # 0.2-2
+  "#A8C9E0",  # 2-20
+  "#E8F4A2",  # 20-200
+  "#F3E55D",  # 200-500  (new; greener/yellow-green, not orange)
+  "#F1B16D",  # 500-2000
+  "#C54B53"   # >2000
+)
+
 names(colors) <- labels
 
 # ----------------------------
@@ -396,10 +416,32 @@ gfw_data <- gfw_2017 %>%
 
 
 # Your custom bins
-breaks_num <- c(0.02, 0.2, 2, 20, 200, 2000)
-labels     <- c("<0.02", "0.02-0.2", "0.2-2", "2-20", "20-200", "200-2000", ">2000")
-colors     <- c("#FFFFE4", "#EFF3FE", "#CADBEE", "#A8C9E0", "#E8F4A2", "#F1B16D", "#C54B53")
+# breaks_num <- c(0.02, 0.2, 2, 20, 200, 2000)
+# labels     <- c("<0.02", "0.02-0.2", "0.2-2", "2-20", "20-200", "200-2000", ">2000")
+# colors     <- c("#FFFFE4", "#EFF3FE", "#CADBEE", "#A8C9E0", "#E8F4A2", "#F1B16D", "#C54B53")
+# names(colors) <- labels
+
+
+breaks_num <- c(0.02, 0.2, 2, 20, 200, 500, 2000)
+
+labels <- c(
+  "<0.02", "0.02-0.2", "0.2-2", "2-20",
+  "20-200", "200-500", "500-2000", ">2000"
+)
+
+colors <- c(
+  "#FFFFE4",  # <0.02
+  "#EFF3FE",  # 0.02-0.2
+  "#CADBEE",  # 0.2-2
+  "#A8C9E0",  # 2-20
+  "#E8F4A2",  # 20-200
+  "#F3E55D",  # 200-500  (new; greener/yellow-green, not orange)
+  "#F1B16D",  # 500-2000
+  "#C54B53"   # >2000
+)
+
 names(colors) <- labels
+
 
 # Combine old + new
 pdat <- bind_rows(gfw_data, new_ind, rousseau_2017) %>%
@@ -694,10 +736,32 @@ lims <- pdat %>%
 
 
 # Your custom bins
-breaks_num <- c(0.02, 0.2, 2, 20, 200, 2000)
-labels     <- c("<0.02", "0.02-0.2", "0.2-2", "2-20", "20-200", "200-2000", ">2000")
-colors     <- c("#FFFFE4", "#EFF3FE", "#CADBEE", "#A8C9E0", "#E8F4A2", "#F1B16D", "#C54B53")
+# breaks_num <- c(0.02, 0.2, 2, 20, 200, 2000)
+# labels     <- c("<0.02", "0.02-0.2", "0.2-2", "2-20", "20-200", "200-2000", ">2000")
+# colors     <- c("#FFFFE4", "#EFF3FE", "#CADBEE", "#A8C9E0", "#E8F4A2", "#F1B16D", "#C54B53")
+# names(colors) <- labels
+
+breaks_num <- c(0.02, 0.2, 2, 20, 200, 500, 2000)
+
+labels <- c(
+  "<0.02", "0.02-0.2", "0.2-2", "2-20",
+  "20-200", "200-500", "500-2000", ">2000"
+)
+
+colors <- c(
+  "#FFFFE4",  # <0.02
+  "#EFF3FE",  # 0.02-0.2
+  "#CADBEE",  # 0.2-2
+  "#A8C9E0",  # 2-20
+  "#E8F4A2",  # 20-200
+  "#F3E55D",  # 200-500  (new; greener/yellow-green, not orange)
+  "#F1B16D",  # 500-2000
+  "#C54B53"   # >2000
+)
+
 names(colors) <- labels
+
+
 
 # Combine old + new
 pdat <- bind_rows(rousseau_chn, new_china_ind) %>%
@@ -826,6 +890,424 @@ ggplot(test_rast) +
     ggsave(here("figs/SI_fig1_ice_layer.png"))
 
 ```
+
+## SI Figure XX 
+
+Explore specific regions of the map 
+  - Africa: Plot the industrial effort by country flag and color code non-african countries as distant water fleets and also a cross-african fill. So time series from 1950-2017, with fill as the flag name (or just domestic fishing), and make a specific fill for non-african flags and cross-african fleets. We will need to filter for only African EEZs, make a flag for distant water (non-african), and plot that way. Other option is to make it just for 2017, make the x axis each African flag country, and then the color code portion of effort that is non-african
+  
+```{r}
+ind_all_df <- fread("/home/ubuntu/data_storage/prep/random_forest/zenodo_data/mapped_industrial_effort_predictions_1950_2017.csv")
+
+## start with flags on x axis for just 2017
+larger_regions_eez <- fread("https://raw.githubusercontent.com/Global-Fishing-Effort/fishing_effort_spatial/refs/heads/main/data/int/larger_regions_iso3c.csv") %>%
+  rename(eez_sovereign_iso3c = Country)
+
+larger_regions_flag <-  fread("https://raw.githubusercontent.com/Global-Fishing-Effort/fishing_effort_spatial/refs/heads/main/data/int/larger_regions_iso3c.csv") %>%
+  rename(flag_country_iso3c = Country)
+
+african_eez_eff <- ind_all_df %>%
+  left_join(larger_regions_eez) %>%
+  mutate(eez_region = ifelse(is.na(region), "High seas", region)) %>%
+  filter(eez_region %in% c("SubAfrica", "NWAfrica")) %>%
+  dplyr::select(-region) %>%
+  left_join(larger_regions_flag) %>%
+  rename(flag_region = region) %>%
+  mutate(dwf_or_no = ifelse(flag_region %in% c("SubAfrica", "NWAfrica"), "African fishing", "Distant Water Fleet")) 
+
+
+##### 2017 only plot 
+
+african_eez_eff_2017 <- african_eez_eff %>%
+  filter(year == 2017)
+
+african_regions <- c("SubAfrica", "NWAfrica")
+
+african_eez_eff_2017_3cat <- african_eez_eff_2017 %>%
+  mutate(fleet_cat = case_when(
+    # Home EEZ: same flag as EEZ sovereign (Somalia in Somalia)
+    flag_country_iso3c == eez_sovereign_iso3c ~ "Home EEZ (domestic)",
+
+    # African flag, but fishing in another African EEZ (Somalia in Kenya)
+    flag_region %in% african_regions ~ "African cross-EEZ",
+
+    # Otherwise it's a non-African flag fishing in African EEZs
+    TRUE ~ "Distant Water Fleet"
+  ))
+
+plot_df_2017 <- african_eez_eff_2017_3cat %>%
+  group_by(eez_sovereign_iso3c, fleet_cat) %>%
+  summarise(nom_active_fishing_days = sum(nom_active_fishing_days, na.rm = TRUE),
+            .groups = "drop") %>%
+  group_by(eez_sovereign_iso3c) %>%
+  mutate(total_days = sum(nom_active_fishing_days, na.rm = TRUE)) %>%
+  ungroup() %>%
+  mutate(
+    eez_sovereign_iso3c = reorder(eez_sovereign_iso3c, total_days),
+    fleet_cat = factor(
+      fleet_cat,
+      levels = c("Home EEZ (domestic)", "African cross-EEZ", "Distant Water Fleet")
+    )
+  )
+
+# Okabe–Ito (colorblind-friendly)
+cb_pal <- c(
+  "Home EEZ (domestic)"   = "#009E73",  # bluish green
+  "African cross-EEZ"     = "#E69F00",  # orange
+  "Distant Water Fleet"   = "#0072B2"   # blue
+)
+
+ggplot(plot_df_2017,
+       aes(x = eez_sovereign_iso3c, y = nom_active_fishing_days, fill = fleet_cat)) +
+  geom_col() +
+  coord_flip() +
+    scale_fill_manual(values = cb_pal, drop = FALSE) +
+  scale_y_continuous(labels = comma) +
+  labs(x = "Exclusive economic zone (EEZ)",
+       y = "Nominal active fishing days (kW days)",
+       fill = NULL) +
+  theme_minimal()
+
+
+pct_2017 <- african_eez_eff_2017 %>%
+  mutate(fleet_cat = case_when(
+    flag_country_iso3c == eez_sovereign_iso3c ~ "Home EEZ (domestic)",
+    flag_region %in% african_regions          ~ "African cross-EEZ",
+    TRUE                                      ~ "Distant Water Fleet"
+  )) %>%
+  group_by(fleet_cat) %>%
+  summarise(days = sum(nom_active_fishing_days, na.rm = TRUE), .groups = "drop") %>%
+  mutate(pct = days / sum(days))
+
+pct_2017
+pct_2017 %>% mutate(pct = percent(pct, accuracy = 0.1))
+
+```
+
+```{r}
+##### Time series plot
+african_regions <- c("SubAfrica", "NWAfrica")
+
+ts_3cat <- african_eez_eff %>%
+  mutate(fleet_cat = case_when(
+    flag_country_iso3c == eez_sovereign_iso3c ~ "Domestic (home EEZ)",
+    flag_region %in% african_regions          ~ "African cross-EEZ",
+    TRUE                                      ~ "Distant Water Fleet"
+  )) %>%
+  group_by(year, fleet_cat) %>%
+  summarise(days = sum(nom_active_fishing_days, na.rm = TRUE), .groups = "drop") %>%
+  mutate(fleet_cat = factor(
+    fleet_cat,
+    levels = c("Domestic (home EEZ)", "African cross-EEZ", "Distant Water Fleet")
+  )) %>%
+  group_by(year) %>%
+  mutate(total_eff = sum(days)) %>%
+  ungroup() %>%
+  mutate(pct = (days/total_eff)*100)
+
+
+
+# Okabe–Ito (colorblind-friendly)
+cb_pal <- c(
+  "Domestic (home EEZ)"   = "#009E73",
+  "African cross-EEZ"     = "#E69F00",
+  "Distant Water Fleet"   = "#0072B2"
+)
+
+ggplot(ts_3cat, aes(x = year, y = days, fill = fleet_cat)) +
+  geom_area() +
+  scale_fill_manual(values = cb_pal, drop = FALSE) +
+  scale_y_continuous(labels = comma) +
+  labs(x = "Year",
+       y = "Nominal active fishing days (kW days)",
+       fill = NULL) +
+  theme_minimal() + 
+    theme(
+    legend.position = "bottom",
+    legend.direction = "horizontal"
+  )
+
+
+```
+
+## Plot artisanal without IFA restrictions
+
+```{r}
+
+
+art_all <- fread("/home/ubuntu/data_storage/prep/random_forest/zenodo_data/artisanal_skylight_sentinel_no_ifa/mapped_artisanal_effort_predictions_1950_2017.csv") %>%
+  filter(year == 2016)
+
+art_all_old <- fread("/home/ubuntu/data_storage/prep/random_forest/zenodo_data/artisanal_skylight_sentinel/mapped_artisanal_effort_predictions_1950_2017.csv") %>%
+  filter(year == 2016)
+
+sum(art_all$nom_active_fishing_days)
+sum(art_all_old$nom_active_fishing_days)
+
+
+# Land polygons
+land <- ne_countries(scale = "medium", returnclass = "sf")
+
+# ----------------------------
+# 2) Your bins + colors (unchanged)
+# ----------------------------
+breaks_num <- c(0.02, 0.2, 2, 20, 200, 2000)
+labels     <- c("<0.02", "0.02-0.2", "0.2-2", "2-20", "20-200", "200-2000", ">2000")
+colors     <- c("#FFFFE4", "#EFF3FE", "#CADBEE", "#A8C9E0", "#E8F4A2", "#F1B16D", "#C54B53")
+names(colors) <- labels
+
+# ----------------------------
+# 3) Helper to summarise -> kW hours/km2 -> bin
+# ----------------------------
+summarise_eff <- function(df, title, gear_filter = NULL) {
+  d <- df
+  if (!is.null(gear_filter)) {
+    d <- gear_filter(d)
+  }
+
+  area <- d %>% distinct(lon, lat, pixel_area_km2)
+
+  out <- d %>%
+    group_by(lon, lat) %>%
+    summarise(nom_eff = sum(nom_active_fishing_hours, na.rm = TRUE), .groups = "drop") %>%
+    filter(nom_eff > 0) %>%
+    left_join(area, by = c("lon", "lat")) %>%
+    mutate(
+      eff_km2 = nom_eff / pixel_area_km2,
+      eff_bin = cut(
+        eff_km2,
+        breaks = c(-Inf, breaks_num, Inf),
+        labels = labels,
+        right = FALSE,
+        include.lowest = TRUE
+      ),
+      eff_bin = factor(eff_bin, levels = labels, ordered = TRUE),
+      panel = title
+    )
+
+  out
+}
+
+# ----------------------------
+# 4) Build panel datasets (A–F)
+# ----------------------------
+pF <- summarise_eff(art_all, "Artisanal (No IFA mask)")
+
+# Common extent across all panels
+
+xlims <- range(pF$lon, na.rm = TRUE)
+ylims <- range(pF$lat, na.rm = TRUE)
+
+
+theme_map_paper <- function(base_size = 11) {
+  theme_minimal(base_size = base_size) +
+    theme(
+      # remove grid + all axis stuff
+      panel.grid      = element_blank(),
+      axis.title      = element_blank(),
+      axis.text       = element_blank(),
+      axis.ticks      = element_blank(),
+
+      # tighten spacing / margins
+      plot.margin     = margin(2, 2, 2, 2),
+      panel.spacing   = unit(2, "mm"),
+
+      # clean borders
+      panel.border    = element_rect(colour = "grey30", fill = NA, linewidth = 0.35),
+
+      # titles like the example (left aligned, bold)
+      plot.title      = element_text(face = "bold", size = 14, hjust = 0),
+
+      # legend
+      legend.position = "bottom",
+      legend.title    = element_text(face = "bold"),
+      legend.text     = element_text(size = 10),
+
+      # make legend keys a bit larger / more readable
+      legend.key.height = unit(5, "mm"),
+      legend.key.width  = unit(10, "mm")
+    )
+}
+
+# 2) Replace your panel_plot() with this version (same inputs)
+panel_plot <- function(pdat, show_legend = FALSE) {
+  ggplot() +
+    geom_raster(data = pdat, aes(lon, lat, fill = eff_bin)) +
+    geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.15) +
+    coord_sf(
+      crs = st_crs(4326),
+      xlim = xlims,
+      ylim = ylims,
+      expand = FALSE
+    ) +
+    scale_fill_manual(
+      values = colors,
+      drop = FALSE,
+      name = "Fishing Effort (kW hours/km²)",
+      guide = guide_legend(
+        nrow = 1,
+        byrow = TRUE,
+        title.position = "top",
+        title.hjust = 0.5
+      )
+    ) +
+    # labs(title = unique(pdat$panel)) +
+    theme_map_paper() +
+    theme(
+      # only show legend on one panel (we'll collect later)
+      legend.position = if (show_legend) "bottom" else "none"
+    )
+}
+
+
+gF <- panel_plot(pF)
+
+
+p_final <- (gF) +
+  theme(
+    legend.position = "bottom",
+    # extra tightening at the combined-plot level
+    plot.margin   = margin(2, 2, 2, 2)
+  )
+
+# p_final
+
+ggsave(
+  here("prep/06_manuscript/figs/fig2_industrial_by_gear_plus_artisanal_2017_no_ifa.png"),
+  plot = p_final,
+  width = 14, height = 8, dpi = 600, bg = "white"
+)
+
+
+test <- pF %>%
+  dplyr::select(lon, lat, eff_km2) %>%
+  rast(., type = "xyz")
+
+test
+plot(test)
+ 
+```
+
+
+## Australia zoom in
+Ok now we will zoom in on Australia and see what is going on. The effort looks too large, especially compared to NZL. We will split the color code even more, to see if it might look a little too large due to edge cases of just going over the threshold into a higher effort category. 
+ - NOTE: I doubt this will do anything, as we have identified a potential problem with the Rousseau data specifically for Australia. We believe they over-reported the number of vessels present in Australia's fleet, which leads to higher effort than in reality. 
+
+```{r}
+
+# --- Australia zoom box (tweak if you want wider)
+aus_xlims <- c(110, 156)
+aus_ylims <- c(-45, -9)
+
+# Australia polygon for overlay (optional but nice)
+aus_land <- land %>% filter(admin == "Australia")
+
+# ----------------------------
+# Make a "parameterized" summariser so we can reuse with different bins
+# ----------------------------
+summarise_eff_bins <- function(df, title, breaks_num, labels, gear_filter = NULL) {
+  d <- df
+  if (!is.null(gear_filter)) d <- gear_filter(d)
+
+  area <- d %>% distinct(lon, lat, pixel_area_km2)
+
+  out <- d %>%
+    group_by(lon, lat) %>%
+    summarise(nom_eff = sum(nom_active_fishing_hours, na.rm = TRUE), .groups = "drop") %>%
+    filter(nom_eff > 0) %>%
+    left_join(area, by = c("lon", "lat")) %>%
+    mutate(
+      eff_km2 = nom_eff / pixel_area_km2,
+      eff_bin = cut(
+        eff_km2,
+        breaks = c(-Inf, breaks_num, Inf),
+        labels = labels,
+        right = FALSE,
+        include.lowest = TRUE
+      ),
+      eff_bin = factor(eff_bin, levels = labels, ordered = TRUE),
+      panel = title
+    )
+
+  out
+}
+
+# ----------------------------
+# 1) Australia subset from Panel A underlying dataset (Industrial total)
+# ----------------------------
+ind_aus <- ind_all %>%
+  filter(lon >= aus_xlims[1], lon <= aus_xlims[2],
+         lat >= aus_ylims[1], lat <= aus_ylims[2])
+
+# Original bins/colors (your current setup)
+breaks_num1 <- c(0.02, 0.2, 2, 20, 200, 2000)
+labels1     <- c("<0.02", "0.02-0.2", "0.2-2", "2-20", "20-200", "200-2000", ">2000")
+colors1     <- c("#FFFFE4", "#EFF3FE", "#CADBEE", "#A8C9E0", "#E8F4A2", "#F1B16D", "#C54B53")
+names(colors1) <- labels1
+
+pA_aus_same <- summarise_eff_bins(ind_aus, "A. Original bins",
+                                 breaks_num = breaks_num1, labels = labels1)
+
+# ----------------------------
+# 2) Split the “high” bin: 200–500 and 500–2000
+# ----------------------------
+breaks_num2 <- c(0.02, 0.2, 2, 20, 200, 500, 2000)
+labels2     <- c("<0.02", "0.02-0.2", "0.2-2", "2-20", "20-200", "200-500", "500-2000", ">2000")
+
+# Keep your existing palette for low bins; add one extra mid-high color
+# (Feel free to tweak this single new hex if you want it more/less “orange”.)
+colors2     <- c("#FFFFE4", "#EFF3FE", "#CADBEE", "#A8C9E0", "#E8F4A2",
+                 "#F1B16D", "#E98B4B", "#C54B53")
+names(colors2) <- labels2
+
+pA_aus_split <- summarise_eff_bins(ind_aus, "B. New bins",
+                                  breaks_num = breaks_num2, labels = labels2)
+
+# ----------------------------
+# 3) Plot helper for Australia-only maps
+# ----------------------------
+plot_aus <- function(pdat, cols, labels, show_legend = TRUE) {
+  ggplot() +
+    geom_raster(data = pdat, aes(lon, lat, fill = eff_bin)) +
+    geom_sf(data = aus_land, fill = "grey85", color = "grey60", linewidth = 0.2) +
+    coord_sf(crs = st_crs(4326), xlim = aus_xlims, ylim = aus_ylims, expand = FALSE) +
+    scale_fill_manual(
+      values = cols,
+      drop = FALSE,
+      name = "Fishing Effort (kW hours/km²)",
+      guide = guide_legend(
+        nrow = 3,
+        byrow = TRUE,
+        title.position = "top",
+        title.hjust = 0.5
+      )
+    ) +
+    labs(title = unique(pdat$panel)) +
+    theme_map_paper() +
+    theme(
+      legend.position   = if (show_legend) "bottom" else "none",
+      legend.key.width  = unit(8, "mm"),
+      legend.key.height = unit(4, "mm")
+    )
+}
+
+g_aus_same  <- plot_aus(pA_aus_same,  colors1, labels1, show_legend = TRUE)
+g_aus_split <- plot_aus(pA_aus_split, colors2, labels2, show_legend = TRUE)
+
+# Side-by-side comparison
+g_aus_same + g_aus_split + plot_layout(guides = "collect") &
+  theme(legend.position = "bottom")
+
+pA_aus_same %>%
+  filter(eff_km2 >=200 & eff_km2 < 2000) %>%
+  summarise(
+    n_cells = n(),
+    share_200_250 = mean(eff_km2 >= 200 & eff_km2 < 250),
+    share_200_500 = mean(eff_km2 >= 200 & eff_km2 < 500)
+  )
+
+```
+
 
 ## Stuff for Figure 1
 Simple line chart of effort hours over time for schematic 
@@ -1249,8 +1731,8 @@ counterfactual_aus_by_gear <- gear_shares %>%
   mutate(
     aus_expected_if_nz_shares = aus_total * NZL
   )
+
 counterfactual_aus_by_gear
+
 ```
-
-
 

@@ -1,0 +1,149 @@
+---
+title: "Save data for Zenodo publishing"
+output: html_document
+date: "2024-12-11"
+---
+
+# Summary
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(terra)
+library(foreach)
+library(doParallel)
+library(glue)
+library(qs)
+library(here)
+library(countrycode)
+library(strex)
+
+source(here("R/dir.R"))
+```
+
+
+Save csv files to upload to Zenodo and the app 
+
+ - We need to grab any gapfilled flags that are not in the flag level modelling from the regional level modelling 
+
+```{r}
+
+  modelled_flags_original <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/predictions_no_ifa/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
+
+all_flags <- unique(modelled_flags_original)
+
+
+cl <- makeCluster(24)  # could probably increase this? 
+registerDoParallel(cl)
+
+
+foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
+  # flag = "RAA"
+  
+  
+  all_files_flag_original <- list.files(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/predictions_no_ifa/"), pattern = flag, full.names = TRUE)
+
+
+  all_data_flag_original <- lapply(all_files_flag_original, qread) %>%
+    bind_rows() %>%
+    mutate(data_type = "flag model")
+
+  
+    if(nrow(all_data_flag_original) == 0){
+    
+    all_data_flag_original <- all_data_flag_regional_gf %>%
+      mutate(nom_active_fishing_hours = 0, eff_active_fishing_hours = 0, nom_active_fishing_days = 0, eff_active_fishing_days = 0, eff_days_km2 = 0, nom_days_km2 = 0, eff_hours_km2 = 0, nom_hours_km2 = 0, data_type = NA)
+    
+  }
+  
+  all_data_fin <- all_data_flag_original %>%
+    filter(nom_active_fishing_hours > 0) %>%
+    mutate(flag_country_name = case_when(
+      flag_country_iso3c == "RAA" ~ "Azores", 
+      flag_country_iso3c == "RAM" ~ "Madeira", 
+      TRUE ~ flag_country_name
+    )) %>%
+    mutate(flag_country_iso3c = flag)
+  
+  write.csv(all_data_fin, file.path(rdsi_dir, glue("prep/random_forest/zenodo_data/artisanal_skylight_sentinel_no_ifa/mapped_by_flag_country/model_preds_1950_2017_{flag}.csv")), row.names = FALSE)
+}
+
+stopCluster(cl)
+
+
+## save as one large csv
+
+  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/zenodo_data/artisanal_skylight_sentinel_no_ifa/mapped_by_flag_country/"), full.names = TRUE)
+
+    all_data <- lapply(all_files_flag, read.csv) %>%
+      bind_rows()
+    
+    test <- all_data %>%
+      filter(year == 2017) %>%
+      group_by(lon, lat) %>% 
+      summarise(effort = sum(nom_active_fishing_hours, na.rm = TRUE)) %>% 
+      ungroup() %>%
+      rast(., type = "xyz")
+    
+    plot(log(test+1))
+    plot(test)
+    
+write.csv(all_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/artisanal_skylight_sentinel_no_ifa/mapped_artisanal_effort_predictions_1950_2017.csv"), row.names = FALSE)
+
+all_data_grouped <- all_data %>% 
+  group_by(year, flag_country_iso3c, flag_country_name, length_category, eez_sovereign_iso3c, eez_sovereign_name, fao_fishing_id, fao_major_fishing_area, sector) %>%
+  summarise(eff_active_fishing_hours = sum(eff_active_fishing_hours, na.rm = TRUE), 
+            eff_active_fishing_days = sum(eff_active_fishing_days, na.rm = TRUE), 
+            nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE), 
+            nom_active_fishing_days = sum(nom_active_fishing_days, na.rm = TRUE),
+            nv = sum(nv, na.rm = TRUE)) %>%
+  ungroup()
+
+
+write.csv(all_data_grouped, file.path(rdsi_dir, "prep/random_forest/zenodo_data/artisanal_skylight_sentinel_no_ifa/artisanal_effort_predictions_by_flag_eez_fao_gear_length_1950_2017.csv"), row.names = FALSE)
+
+
+
+  all_data_grouped <- read.csv(file.path(rdsi_dir, "prep/random_forest/zenodo_data/artisanal_skylight_sentinel_no_ifa/artisanal_effort_predictions_by_flag_eez_fao_gear_length_1950_2017.csv"))
+  
+all_data_grouped_2 <- all_data_grouped %>% 
+  group_by(year, flag_country_iso3c, flag_country_name, length_category) %>%
+    summarise(modeled_eff_active_fishing_hours = sum(eff_active_fishing_hours, na.rm = TRUE), 
+            modeled_eff_active_fishing_days = sum(eff_active_fishing_days, na.rm = TRUE), 
+            modeled_nom_active_fishing_hours = sum(nom_active_fishing_hours, na.rm = TRUE), 
+            modeled_nom_active_fishing_days = sum(nom_active_fishing_days, na.rm = TRUE),
+            modeled_nv = sum(nv, na.rm = TRUE)) %>%
+  ungroup() %>%
+    mutate(flag_country_name = case_when(
+          flag_country_iso3c == "RAM" ~ "Madeira",
+          flag_country_iso3c == "RAA" ~ "Azores", 
+          TRUE ~ flag_country_name
+  ))
+
+hist_fish_data <- qs::qread(here("data/model_features/rousseau_total_art_vessels.qs")) %>%
+    dplyr::select(flag_country_iso3c = flag_fin, year, length_category, total_nv = nv, total_eff_days = eff_active_days, total_nom_days = nom_active_days) %>%
+        filter(total_nv > 0) %>%
+  mutate(flag_country_name = countrycode(flag_country_iso3c, origin = "iso3c", destination = "country.name")) %>%
+  mutate(flag_country_name = case_when(
+          flag_country_iso3c == "RAM" ~ "Madeira",
+          flag_country_iso3c == "RAA" ~ "Azores", 
+          TRUE ~ flag_country_name
+  )) %>% 
+  left_join(all_data_grouped_2) %>%
+  mutate(proportion_nv_modeled = modeled_nv/total_nv,
+         prop_nom_days_modeled = modeled_nom_active_fishing_days/total_nom_days)
+
+missing_data <- hist_fish_data %>%
+  # filter(proportion_nv_modeled != 1) %>%
+  # filter(proportion_nv_modeled < 0.9999) %>% # 0 awesome! 
+  filter(is.na(proportion_nv_modeled)) # ok missing a lot.
+
+write.csv(hist_fish_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/artisanal_skylight_sentinel_no_ifa/known_artisanal_effort_rousseau.csv"), row.names = FALSE)
+
+test <- hist_fish_data %>% filter(flag_country_iso3c == "UKR", year == 1950)
+
+sum(test$modeled_nom_active_fishing_hours) # 
+
+```
+
