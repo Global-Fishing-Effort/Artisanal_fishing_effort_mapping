@@ -20,7 +20,7 @@ Data sources:
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-
+library(FNN)
 library(tidyverse)
 library(terra)
 library(glue)
@@ -35,6 +35,10 @@ library(mapview)
 library(data.table)
 library(readr)
 library(terra)
+library(xml2)
+library(httr2)
+library(stringr)
+library(strex)
 
 source(here("R/dir.R"))
 
@@ -73,17 +77,6 @@ qs::qsave(all_s1, file.path("/home/ubuntu/data_storage/raw_data/global_fishing_w
 fwrite(all_s1, file.path("/home/ubuntu/data_storage/raw_data/global_fishing_watch/sentinel_1_prepped.csv"), row.names = FALSE)
 
 all_s1 <- fread(file.path("/home/ubuntu/data_storage/raw_data/global_fishing_watch/sentinel_1_prepped.csv"))
-
-test <- all_s1 %>%
- filter(str_detect(timestamp, "2025")) %>%
-  mutate(lon_1 = round(lon),
-         lat_1 = round(lat)) %>%
-  group_by(lon_1, lat_1) %>%
-  summarise(nv = n()) %>%
-  ungroup()
-
-test_r <- rast(test, type = "xyz")
-plot(test_r) # cool. Looks like this will only cover coastal fisheries. How far offshore though? Seems like we can definitely compare industrial with this, if we limit it to EEZs and no high seas? And it has length categories so we could disaggregate it that way perhaps. 
 
 # 1) Make a SpatVector of points in EPSG:4326
 pts <- vect(all_s1[, c("lon","lat")], geom = c("lon","lat"), crs = "EPSG:4326")
@@ -124,11 +117,6 @@ pa_df <- pa %>%
 
 fwrite(pa_df, here("data/validation/s1_presence_1deg.csv"), row.names = FALSE)
 
-test <- pa_df %>%
-  filter(is.na(pixel_id)) %>%
-  dplyr::select(lon, lat, presence) %>%
-  rast(., type = "xyz")
-
 ## now we need to see the coverage of sentinel-1 data, which we will take from Paolo et al. 2024: https://www.nature.com/articles/s41586-023-06825-8/figures/5; https://figshare.com/articles/journal_contribution/Satellite_mapping_reveals_extensive_industrial_activity_at_sea_-_analysis_data/24309475?file=44031654
 paolo_tbl <- read.csv(here("data/validation/study_area.csv"))
 
@@ -158,8 +146,6 @@ sa_r <- rasterize(vect(sa_00), grid, field=1, background=NA)  # 1 inside, NA out
 sa_r <- terra::mask(sa_r, grid)
 writeRaster(sa_r, here("data/validation/paolo_study_area_1deg.tif"), overwrite=TRUE)
 
-test <- rast(here("data/validation/paolo_study_area_1deg.tif"))
-  
 
 # save as data frame so we can filter our fishing data to these cells 
 sa_df <- sa_r %>%
@@ -330,138 +316,10 @@ writeRaster(rs_fishing_prop_r, here("data/validation/rousseau_fishing_s1_area_pr
 ```
 
 
-ICCAT Sample fishing statistics and fish sizes
-
- - Catch and fishing effort statistics for each species by small area (1x1 degree squares for most gears, 5x5 degrees squares for longlines), gear, flag, and month. Task 2 data also include actual size frequencies of samples measured for each species by small area, gear, flag and month. In some cases, detailed size samples are also extrapolated to match total catches in order to be used in stock assessments. This includes the CATDIS and catch-at-size datasets. 
- 
- 
-I believe this data is catch and effort with sizes "1x1"   "5x5"   "10x20" "10x10" "5x10"  "none" 
-
-I think the first dataset will be most useful
-
-```{r}
-df <- mdb.get("/home/ubuntu/data_storage/raw_data/ICCAT/task_2_catch_effort/all_data_t2ce_20250131web.mdb")
-
-spatial_data <- df[[3]]
-
-# lets filter for 1x1 
-spat_df_1 <- spatial_data %>%
-  filter(SquareTypeCode == "1x1") %>% # most is 1x1, good
-  pivot_longer(values_to = "catch", cols = 20:54, names_to = "species") %>%
-  filter(CatchUnit == "kg")
-
-test_2023 <- spat_df_1 %>%
-#  filter(YearC == 2023) %>%
-  group_by(Lon, Lat) %>%
-  summarise(catch = sum(catch, na.rm = TRUE)) %>%
-  ungroup() 
-
-
-# 1. Get global land polygons (at medium resolution)
-land <- ne_countries(scale = "medium", returnclass = "sf")
-
-# Plot with coord_sf()
-p <- ggplot() +
-  geom_raster(data = test_2023, mapping = aes(Lon, Lat, fill = catch)) +
-  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1)
-
-p # ok, so it looks like mostly in North Atlantic (Norway, Denmark, etc), Meditteraen, and Indian ocean is reported. It probably varies each year. 
-
-# what about the longline reconstruction 
-
-ll_r <- read.csv("/home/ubuntu/data_storage/raw_data/ICCAT/longline_reconstruction/EFFDIS_LL2000-2023.csv")
-
-test <- ll_r %>%
-  group_by(xLon5, yLat5) %>%
-  summarise(eff = sum(ReportedEffort, na.rm = TRUE)) %>%
-  ungroup()
-
-ggplot() +
-  geom_raster(data = test, mapping = aes(xLon5, yLat5, fill = eff)) +
-  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1)
-# all of the atlantic, because the cells are so large. 
-
-# catch data raised to total landings at 5x5 degree
-
-all_catch <- read.csv("/home/ubuntu/data_storage/raw_data/ICCAT/cdis5023-all9sp.csv")
-
-test <- all_catch %>%
-  group_by(Lon5, Lat5) %>%
-  summarise(catch = sum(Catch_t)) %>%
-  ungroup()
-
-ggplot() +
-  geom_raster(data = test, mapping = aes(Lon5, Lat5, fill = catch)) +
-  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1) # ok this appears to be the same as the first data we read in, just aggregated to 5x5 and matched to total catch statistics? 
-
-# tropicals data from ICCAT
-trop_df <- read_xlsx("/home/ubuntu/data_storage/raw_data/ICCAT/task_2_catch_effort/tropical_fishery_t2ce_ETRO-PS1991-2023_bySchool_v1.xlsx", sheet = 2)
-# i have no idea what these columns mean...
-
-
-```
-
-ABARES data 
- - 1x1 degree
- - 2010-2019
- - We could limit our data to those same cells and compare if there is fishing 
-
-```{r}
-
-# List all layers in the geodatabase
-st_layers("/home/ubuntu/data_storage/raw_data/ABARES/ALLFSY/ALLFSY.gdb")
-
-# Read a specific layer (replace "layer_name" with one from the list)
-data <- st_read("/home/ubuntu/data_storage/raw_data/ABARES/ALLFSY/ALLFSY.gdb", layer = "ALLFSY_fp_2019")
-
-mapview(data)
-
-test <- data %>%
-  st_drop_geometry()
-## looks like "ALLFSY_fp_yyyy" layers are total area fished layers? This is gridded so that is probably what we want. Unclear of the resolution. Looks pretty large 
-
-# sanity check
-st_crs(data)$epsg   # should be 4283
-
-# width/height in degrees from each polygon's bbox
-deg_dxdy <- do.call(rbind, lapply(st_geometry(data), function(g) {
-  bb <- st_bbox(g)
-  c(dx = unname(bb["xmax"] - bb["xmin"]),
-    dy = unname(bb["ymax"] - bb["ymin"]))
-})) %>% as.data.frame()
-
-# summarize (median + mode after rounding to tame tiny float jitter)
-mode_of <- function(x) {
-  tx <- table(round(x, 6)); as.numeric(names(tx)[which.max(tx)])
-}
-
-tibble(
-  dx_deg_median = median(deg_dxdy$dx),
-  dy_deg_median = median(deg_dxdy$dy),
-  dx_deg_mode   = mode_of(deg_dxdy$dx),
-  dy_deg_mode   = mode_of(deg_dxdy$dy)
-)
-
-# ok cool, it is 1x1 degree, so matches our cell sizes. 
-
-```
-
-
 See if i can figure out how to grab data from AFMA logbooks: 
 https://www.data.gov.au/data/dataset/summaries-of-afma-log-book-data-on-effort-distribution-for-commonwealth-fisheries-in-the-austra
 
-
-
-
 ```{r}
-library(xml2)
-library(httr2)
-library(stringr)
-
-test_layers <- layer_meta %>%
-  filter(str_detect(name, "nerp:sa_|nerp:nsw_state|nerp:nt_state|nerp:wa_state")) %>%
-  dplyr::select(name)
-
 # WFS capabilities
 wfs_resp <- request("https://www.cmar.csiro.au/geoserver/nerp/wfs") |>
   req_url_query(service = "WFS", request = "GetCapabilities") |>
@@ -486,55 +344,11 @@ feature_names <- xml_find_all(cap_xml, "//*[local-name()='FeatureType']/*[local-
 length(feature_names)
 head(feature_names, 50)
 
-# Search likely AFMA/logbook layers
-feature_names[str_detect(feature_names, regex("effort|nerp:sa_|nerp:nsw_state|nerp:nt_state|nerp:wa_state", ignore_case = TRUE))]
-
-layer_name <- "nerp:sa_traps_msf_2006_2010"
-
-u <- paste0(
-  "https://www.cmar.csiro.au/geoserver/nerp/wfs",
-  "?service=WFS",
-  "&version=2.0.0",
-  "&request=GetFeature",
-  "&typeNames=", URLencode(layer_name, reserved = TRUE),
-  "&outputFormat=application/json"
-)
-
-x_json <- st_read(u, quiet = TRUE) %>%
-  # filter(days_n > 0)
-  filter(trolling > 0)
-
-st_geometry_type(x_json) |> table()
-plot(x_json["trolling"])
-
-test <- x_json %>%
-  st_drop_geometry()
-
-
-# example: use 'days_n' as the raster value
-# convert sf -> terra vector
-v <- vect(x_json)
-
-# make a 1x1 degree template raster over the extent of the data
-r_template <- rast(
-  ext(v),
-  resolution = 1,
-  crs = "EPSG:4326"
-)
-
-# rasterize polygons to the template
-# (for polygon cells that align with the grid, this should be straightforward)
-r_days <- rasterize(v, r_template, field = "trolling")
-
-plot(r_days) # ok, so I could in theory compile all effort data into one dataset per each state? 
-
-feature_names[str_detect(feature_names, regex("effort", ignore_case = TRUE))]
-
 ```
 
-```{r}
-library(strex)
+Grab state level effort data from feature_names
 
+```{r}
 # Search likely AFMA/logbook layers
 layers <- feature_names[str_detect(feature_names, regex("effort|nerp:sa_|nerp:nsw_state|nerp:nt_state|nerp:wa_state", ignore_case = TRUE))]
 
@@ -699,6 +513,8 @@ test <- rast(here("data/validation/afma_data/rasters/sa_handline_msf_2006_2010_b
 
 ```
 
+Turn rasters into a dataset
+
 ```{r}
 
 rast_list <- list.files(here("data/validation/afma_data/rasters/"), full.names = TRUE)
@@ -734,7 +550,6 @@ missing_df <- eff_df %>%
 
 # rows that need filling
 idx_missing <- which(is.na(missing_df$pixel_id))
-library(FNN)
 
 # nearest neighbor search: query = missing_df points, data = data_grid points
 nn <- get.knnx(
@@ -1024,43 +839,317 @@ test <- new_eff_df_fin %>%
 plot(test)
 ```
 
-I would like to grab another layer and save it. The nerp:vesseldensity2015_finescale, i.e., "vesseldensity layers would be good. 
+I would like to grab another layer and save it. The nerp:vesseldensity2015_finescale, i.e., "vesseldensity layers for different years. 
 
- 
 ```{r}
+# WFS capabilities
+wfs_resp <- request("https://www.cmar.csiro.au/geoserver/nerp/wfs") |>
+  req_url_query(service = "WFS", request = "GetCapabilities") |>
+  req_perform()
 
-library(httr2)
-library(xml2)
-library(sf)
-library(dplyr)
 
 wfs_base <- "https://www.cmar.csiro.au/geoserver/nerp/wfs"
-layer_name <- "nerp:vesseldensity2015_finescale"  # adjust to exact Name from capabilities
 
-# 1) What attributes does the layer have?
-desc <- request(wfs_base) |>
-  req_url_query(
-    service="WFS", version="2.0.0", request="DescribeFeatureType",
-    typeNames=layer_name
-  ) |>
-  req_perform() |>
-  resp_body_string()
+# Get WFS capabilities
+wfs_resp <- request(wfs_base) |>
+  req_url_query(service = "WFS", request = "GetCapabilities") |>
+  req_perform()
 
-cat(substr(desc, 1, 800))
+cap_xml <- read_xml(resp_body_string(wfs_resp))
 
-# 2) Pull a small sample of features
+# Extract feature type names (namespace-agnostic)
+feature_names <- xml_find_all(cap_xml, "//*[local-name()='FeatureType']/*[local-name()='Name']") |>
+  xml_text()
+
+layers <- feature_names[
+  str_detect(feature_names, regex("vesseldensity", ignore_case = TRUE)) &
+  str_detect(feature_names, regex("finescale", ignore_case = TRUE))
+]
+
+## there are broadscale and finescale. What is the difference? Just resolution. We'll use the finescale. 
+
+for(layer_name in layers){
+#  layer_name <- "nerp:vesseldensity2013_finescale"  # adjust to exact Name from capabilities
+
+# 2) Pull features
 u <- paste0(
   wfs_base,
   "?service=WFS&version=2.0.0&request=GetFeature",
   "&typeNames=", URLencode(layer_name, reserved = TRUE)
 )
 
-x <- st_read(u, quiet = TRUE)
-test <- st_drop_geometry(x)
+x_fine <- st_read(u, quiet = TRUE)
+# test_fine <- st_drop_geometry(x_fine)
 
+# 2015 finescale has 458354 rows
+# 2015 broadscale has 2661 rows 
+
+# colnames(test_fine)
+#  [1] "gml_id"    "cargo"     "fishing"   "harbour"   "hsc"       "military"  "official"  "passengr"  "passfast"  "rec_ais"   "sail"     
+# [12] "tanker"    "working"   "fast"      "small"     "large"     "l_lt10m"   "l10_25m"   "l25_50m"   "l50_100m"  "l100_200m" "l_gt200m" 
+
+# both datasets have same columns
+# probably want `fishing` column. Seems like this represents the number of fishing vessels in 2015? Not sure if this means that there were 2.2 million fishing trips in 2015 or 2.2 million individual, distinct vessels? Seems like probably fishing trips to me, since AUS does not have 2.2 million vessels. Rousseau et al says ~7000, which we think is too high. 
+
+# sum(test_fine$fishing) # 2224367 - broadscale; # 2206029 - finescale
+
+# lets plot each of these and compare. The total number of fishing vessels seems ok to map:
+
+# class(x_broad)
+# st_geometry(x_broad)
+# attr(x_broad, "sf_column")
+# class(x_broad$wkb_geometry)
+
+# plot broadscale
+make_bbox_poly <- function(g) {
+  bb <- st_bbox(g)
+  st_polygon(list(rbind(
+    c(bb["xmin"], bb["ymin"]),
+    c(bb["xmax"], bb["ymin"]),
+    c(bb["xmax"], bb["ymax"]),
+    c(bb["xmin"], bb["ymax"]),
+    c(bb["xmin"], bb["ymin"])
+  )))
+}
+
+# plot finescale
+
+bbox_geoms <- st_sfc(
+  lapply(st_geometry(x_fine), make_bbox_poly),
+  crs = st_crs(x_fine)
+)
+
+x_box <- st_set_geometry(x_fine, bbox_geoms)
+
+# ggplot(x_box) +
+#   geom_sf(aes(fill = fishing), color = NA) +
+#   scale_fill_viridis_c(
+#     trans = "log10",
+#     na.value = "grey90",
+#     name = "Fishing"
+#   ) +
+#   theme_minimal()
+
+## ok, the broadscale is just much lower res. I'll try to rasterize the finescale and see what happens:
+
+v <- vect(x_box)
+
+
+bb1 <- st_bbox(x_box[1, ])
+c(
+  xres = as.numeric(bb1["xmax"] - bb1["xmin"]),
+  yres = as.numeric(bb1["ymax"] - bb1["ymin"])
+) # check resolution
+
+
+r_template <- rast(v, resolution = 0.03333333)
+
+r_fishing <- rasterize(
+  v,
+  r_template,
+  field = "fishing",
+  fun = "sum"
+)
+
+# global(r_fishing, "sum", na.rm = TRUE) # 2206029
+# sum(x_box$fishing) # 2206029
+# perfect.
+
+# layer_name
+save_name <- str_after_first(layer_name, ":")
+
+writeRaster(r_fishing, here(glue("data/validation/afma_data/vessel_density/{save_name}_raw.tif")), overwrite = TRUE)
+
+# aggregate up to 1deg
+r_fishing_one <- aggregate(r_fishing, fact = 30, fun = "sum", na.rm = TRUE)
+  
+r_fishing_one_fix <- terra::resample(r_fishing_one, grid, method = "bilinear")
+
+# global(r_fishing_one_fix, "sum", na.rm = TRUE)
+# plot(r_fishing_one_fix)
+
+writeRaster(r_fishing_one_fix, here(glue("data/validation/afma_data/vessel_density/{save_name}_one_deg.tif")), overwrite = TRUE)
+
+}
+
+# now extract as a dataframe with our pixel_ids 
+
+files <- list.files(
+  here("data/validation/afma_data/vessel_density/"),
+  full.names = TRUE,
+  pattern = "one_deg"
+)
+
+eff_rast <- rast(files)
+
+names(eff_rast) <- basename(files)
+
+eff_rasts <- as.data.frame(eff_rast, xy = TRUE)
+
+eff_rasts_long <- eff_rasts %>%
+  pivot_longer(
+    cols = -c(x, y),
+    names_to = "file",
+    values_to = "vessel_density"
+  ) %>%
+  mutate(
+    year = str_extract(file, "20\\d{2}") |> as.integer()
+  ) %>%
+  select(x, y, year, fishing_vessels_n = vessel_density) %>%
+      left_join(data_grid, by = c("x" = "lon", "y" = "lat"))
+  
+missing_df <- eff_rasts_long %>%
+  filter(is.na(pixel_id))
+
+# rows that need filling
+idx_missing <- which(is.na(missing_df$pixel_id))
+
+# nearest neighbor search: query = missing_df points, data = data_grid points
+nn <- get.knnx(
+  data = as.matrix(data_grid[, c("lon", "lat")]),
+  query = as.matrix(missing_df[idx_missing, c("x", "y")]),
+  k = 1
+)
+
+# assign nearest pixel_id
+missing_df$pixel_id[idx_missing] <- data_grid$pixel_id[nn$nn.index[, 1]]
+
+# optional: also keep distance (in degrees)
+missing_df$nn_dist_deg <- NA_real_
+missing_df$nn_dist_deg[idx_missing] <- nn$nn.dist[, 1]
+
+missing_df <- missing_df %>%
+  dplyr::select(pixel_id, year, fishing_vessels_n)
+
+new_eff_df <- eff_rasts_long %>%
+  filter(!is.na(pixel_id)) %>%
+  dplyr::select(pixel_id, year, fishing_vessels_n) %>%
+  rbind(., missing_df) %>%
+  group_by(pixel_id, year) %>%
+  summarise(fishing_vessels_n = sum(fishing_vessels_n, na.rm = TRUE)) %>%
+  ungroup() %>%
+  left_join(data_grid) 
+
+fwrite(new_eff_df, here("data/validation/afma_data/vessel_density_df_all.csv"))
 
 ```
  
 
 
+
+ICCAT Sample fishing statistics and fish sizes
+
+ - Catch and fishing effort statistics for each species by small area (1x1 degree squares for most gears, 5x5 degrees squares for longlines), gear, flag, and month. Task 2 data also include actual size frequencies of samples measured for each species by small area, gear, flag and month. In some cases, detailed size samples are also extrapolated to match total catches in order to be used in stock assessments. This includes the CATDIS and catch-at-size datasets. 
+ 
+ 
+I believe this data is catch and effort with sizes "1x1"   "5x5"   "10x20" "10x10" "5x10"  "none" 
+
+I think the first dataset will be most useful
+
+```{r}
+df <- mdb.get("/home/ubuntu/data_storage/raw_data/ICCAT/task_2_catch_effort/all_data_t2ce_20250131web.mdb")
+
+spatial_data <- df[[3]]
+
+# lets filter for 1x1 
+spat_df_1 <- spatial_data %>%
+  filter(SquareTypeCode == "1x1") %>% # most is 1x1, good
+  pivot_longer(values_to = "catch", cols = 20:54, names_to = "species") %>%
+  filter(CatchUnit == "kg")
+
+test_2023 <- spat_df_1 %>%
+#  filter(YearC == 2023) %>%
+  group_by(Lon, Lat) %>%
+  summarise(catch = sum(catch, na.rm = TRUE)) %>%
+  ungroup() 
+
+
+# 1. Get global land polygons (at medium resolution)
+land <- ne_countries(scale = "medium", returnclass = "sf")
+
+# Plot with coord_sf()
+p <- ggplot() +
+  geom_raster(data = test_2023, mapping = aes(Lon, Lat, fill = catch)) +
+  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1)
+
+p # ok, so it looks like mostly in North Atlantic (Norway, Denmark, etc), Meditteraen, and Indian ocean is reported. It probably varies each year. 
+
+# what about the longline reconstruction 
+
+ll_r <- read.csv("/home/ubuntu/data_storage/raw_data/ICCAT/longline_reconstruction/EFFDIS_LL2000-2023.csv")
+
+test <- ll_r %>%
+  group_by(xLon5, yLat5) %>%
+  summarise(eff = sum(ReportedEffort, na.rm = TRUE)) %>%
+  ungroup()
+
+ggplot() +
+  geom_raster(data = test, mapping = aes(xLon5, yLat5, fill = eff)) +
+  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1)
+# all of the atlantic, because the cells are so large. 
+
+# catch data raised to total landings at 5x5 degree
+
+all_catch <- read.csv("/home/ubuntu/data_storage/raw_data/ICCAT/cdis5023-all9sp.csv")
+
+test <- all_catch %>%
+  group_by(Lon5, Lat5) %>%
+  summarise(catch = sum(Catch_t)) %>%
+  ungroup()
+
+ggplot() +
+  geom_raster(data = test, mapping = aes(Lon5, Lat5, fill = catch)) +
+  geom_sf(data = land, fill = "grey85", color = "grey60", linewidth = 0.1) # ok this appears to be the same as the first data we read in, just aggregated to 5x5 and matched to total catch statistics? 
+
+# tropicals data from ICCAT
+trop_df <- read_xlsx("/home/ubuntu/data_storage/raw_data/ICCAT/task_2_catch_effort/tropical_fishery_t2ce_ETRO-PS1991-2023_bySchool_v1.xlsx", sheet = 2)
+# i have no idea what these columns mean...
+
+
+```
+
+ABARES data 
+ - 1x1 degree
+ - 2010-2019
+ - We could limit our data to those same cells and compare if there is fishing 
+
+```{r}
+
+# List all layers in the geodatabase
+st_layers("/home/ubuntu/data_storage/raw_data/ABARES/ALLFSY/ALLFSY.gdb")
+
+# Read a specific layer (replace "layer_name" with one from the list)
+data <- st_read("/home/ubuntu/data_storage/raw_data/ABARES/ALLFSY/ALLFSY.gdb", layer = "ALLFSY_fp_2019")
+
+mapview(data)
+
+test <- data %>%
+  st_drop_geometry()
+## looks like "ALLFSY_fp_yyyy" layers are total area fished layers? This is gridded so that is probably what we want. Unclear of the resolution. Looks pretty large 
+
+# sanity check
+st_crs(data)$epsg   # should be 4283
+
+# width/height in degrees from each polygon's bbox
+deg_dxdy <- do.call(rbind, lapply(st_geometry(data), function(g) {
+  bb <- st_bbox(g)
+  c(dx = unname(bb["xmax"] - bb["xmin"]),
+    dy = unname(bb["ymax"] - bb["ymin"]))
+})) %>% as.data.frame()
+
+# summarize (median + mode after rounding to tame tiny float jitter)
+mode_of <- function(x) {
+  tx <- table(round(x, 6)); as.numeric(names(tx)[which.max(tx)])
+}
+
+tibble(
+  dx_deg_median = median(deg_dxdy$dx),
+  dy_deg_median = median(deg_dxdy$dy),
+  dx_deg_mode   = mode_of(deg_dxdy$dx),
+  dy_deg_mode   = mode_of(deg_dxdy$dy)
+)
+
+# ok cool, it is 1x1 degree, so matches our cell sizes. 
+
+```
 

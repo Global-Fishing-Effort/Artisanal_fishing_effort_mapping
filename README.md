@@ -46,6 +46,7 @@ cell. We fit an individual model for each flag state represented in Rousseau et 
 -   Bathymetry (depth in m) ([Global Fishing Watch; Kroodsma et al. 2018](https://globalfishingwatch.org/data-download/datasets/public-bathymetry-v1))
 - [Global Fishing Index governance capacity, Spijkers wt al. 2023](https://cdn.minderoo.org/assets/documents/policies/20220505-global-fishing-index-2021-report.pdf)
 -   Year (Model trained on 2009-2024)
+- Number of satellite looks
 
 We estimate the amount of fishing effort in each cell by multplying the
 total known amount (per flag, sector (artisnal), and vessel length) (from Rousseau et al. 2019) by the
