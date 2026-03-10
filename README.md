@@ -3,10 +3,10 @@
 
 This is a repository for spatialising country-level artisanal fishing effort data from
 [Rousseau et al. 2019 and 2024](https://metadata.imas.utas.edu.au/geonetwork/srv/eng/catalog.search#/metadata/1241a51d-c8c2-4432-aa68-3d2bae142794)
-to grid cells, based on observed, high resolution, satellite vessel detections from Skylight (provided by Minderoo) and [observed Sentinel 2 Satellite Imagery from Global Fishing Watch
-data](https://globalfishingwatch.org/data-download/datasets/public-sentinel2-vessel-detections%3Av1.0)
-(a top-down approach). We apply a similar methodology to that of [McDonald et al. 2024](https://www.pnas.org/doi/10.1073/pnas.2400592121)
+to grid cells, based on observed, high resolution, satellite vessel detections from Skylight (provided by Minderoo) and [observed Sentinel 2 Satellite Imagery from Global Fishing Watch data](https://globalfishingwatch.org/data-download/datasets/public-sentinel2-vessel-detections%3Av1.0)
+(a top-down approach). We apply a similar methodology to that of [McDonald et al. 2024](https://www.pnas.org/doi/10.1073/pnas.2400592121).
 
+To access the output data associated with this modelling, we have created a [shiny app](https://data.mapping-global-fishing.cloud.edu.au/shiny/mapping_fishing_effort_app/) and have provided the data via a [Zenodo repository](https://zenodo.org/records/17703317). The data contained in these also includes data from our industrial modelling, whose code can be found here: https://github.com/Global-Fishing-Effort/fishing_effort_spatial 
 
 Please read this file before trying to reproduce the output from this research project. Below you will find information on the model structure and data, contact information for the repository creator, and a description of the repository structure with each section explained.
 
@@ -17,8 +17,7 @@ This model predicts the spatial distribution of fishing effort globally, using e
 
 ### Model Structure
 
-The models predict the **proportion of fishing effort** in each grid
-cell. We fit an individual model for each flag state represented in Rousseau et al. 2019 and 2024:
+We fit an individual model for each flag state represented in Rousseau et al. 2019 and 2024:
 
 #### Categorical Predictors
 
@@ -37,6 +36,8 @@ cell. We fit an individual model for each flag state represented in Rousseau et 
     -   Distance from port (m) ([Global Fishing Watch; Kroodsma et al. 2018](https://globalfishingwatch.org/data-download/datasets/public-distance-from-port-v1))
     -   Distance from shore (m) ([Global Fishing Watch; Kroodsma et al. 2018](https://globalfishingwatch.org/data-download/datasets/public-distance-from-shore-v1))
     - Distance to nearest seamount (m) ([Yesson et al. 2020](https://doi.pangaea.de/10.1594/PANGAEA.921688))
+    - Nearest MPA distance (m)
+    - Years since designation of the nearest MPA (years)
 -   Environmental variables:
     -   Chlorophyll-A concentration (mean, sd) in mg/m³ (Present: [Aqua MODIS Chl-a 4km monthly](https://coastwatch.pfeg.noaa.gov/erddap/griddap/erdMH1chlamday.html))
     -   Sea surface temperature (mean, sd) in °C (Present: [NOAA 0.25-deg Daily OI SST V2.1](https://coastwatch.pfeg.noaa.gov/erddap/info/ncdcOisst21Agg_LonPM180/index.html))
@@ -50,7 +51,7 @@ cell. We fit an individual model for each flag state represented in Rousseau et 
 
 We estimate the amount of fishing effort in each cell by multplying the
 total known amount (per flag, sector (artisnal), and vessel length) (from Rousseau et al. 2019) by the
-proportion in each cell (per those same categories).
+proportion of fishing effort estimated in each cell (per those same categories).
 
 ### **Historical Predictions**
 
@@ -89,15 +90,6 @@ under the following assumptions:
  - Wind speed: [ISIMIP; Lange & Büchner 2021](https://data.isimip.org/datasets/dbcf73ba-878d-41d4-be7d-e28ce13121bc/ )
  - Sea Surface Temperature: [ISIMIP; Büchner 2024](https://data.isimip.org/datasets/9e8a4b3f-5a56-4f4c-9677-1737a9f952d7/)
 
-####  **Limitations**
-
-Users should be aware that historical predictions may not capture:
-
--   Technological changes in fishing capabilities
-
--   Evolution of fishing strategies and practices
-
--   Changes in management regulations
 
 ### Other assumptions
 
@@ -133,6 +125,7 @@ listed below.
 | vessels       | This folder contains prepped to 0.5 degree vessel detection data from Skylight and Sentinel-2 data |
 | int            | This folder contains a number of intermediate data products that are used in the markdown files, and are necessary for reproduction, specifically, the historical climate data |
 | model_features | Processed versions of raw data sets we will use for the model. All data stored here are processed to 0.5 by 0.5 degree cell sizes.|
+| detections_looks| This folder contains prepped data of the vessel detections which includes the number of satellite looks (which is used for modelling) | 
 
 
 ## Contact

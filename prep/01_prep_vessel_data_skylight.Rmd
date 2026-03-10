@@ -7,7 +7,6 @@ date: "2025-05-29"
 ## Summary
 Here we prep data Skylight satellite imagery vessel detections  to use in our models. The first script `00_unzip_raw_data` unzips the data which we read in here. 
 
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
@@ -271,19 +270,5 @@ vessels_final %>%
   )
 
 ```
-
-
-
-Brainstorming: 
-
-How to determine flag country? 
- - we will be assuming that if flag country = eez area where the vessel is detected. So we will have to count the number of vessels detected in each eez and calculate a proportion in each cell? 
-
-Vessel IDs:
- - Are they unique across the batches? For example, is vessel id 0 the same in batch 1 as in batch 3? 
-   - "The idx column in vessel.csv is not unique between files. They use a combination of fname column and idx column for naming the vessel crops so that it is unique, but that assumes your filenames are unique. Across the three batches, the filename and idx combined should be unique, but this is not guaranteed since it is possible there are locations that are duplicated across the batches."
-   - Ok so they aren't unique across batches. Are they unique across images?? From Skylight's response it doesn't seem like it. "The idx column in vessel.csv is not unique between files". But then what do the idx tell us?? Are they only unique within the image pulls? Yes. 
-
-
 
 

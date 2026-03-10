@@ -55,18 +55,9 @@ ocean <- ne_download(scale = 50, type = 'ocean', category = 'physical',returncla
 # Defining our global grid
 
 ```{r}
-pixel_size <- 0.5
-
-# Start with global ocean
-starting_shape <- ocean
-```
-
-We define a global grid using pixels that are `r pixel_size` degree latitude by `r pixel_size` degree longitude. We will then aggregate all of our model feature data to these `r pixel_size`x`r pixel_size` degree pixels. We include only pixels that overlap with the ocean. Each pixel is assigned a static `pixel_id`.
-
-```{r}
 data_grid <- data.table::fread(here::here("data/model_features/global_grid.csv")) %>%
   st_as_sf(wkt = "geometry_wkt",
-           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
+           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")  # made in 02_prep_eez_data.Rmd
 
 ```
 

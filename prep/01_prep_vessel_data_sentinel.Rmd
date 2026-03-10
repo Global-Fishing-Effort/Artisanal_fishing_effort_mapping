@@ -156,9 +156,3 @@ plot(vessel_batch_counts) # cool, looks like the whole globe.
 
 ```
 
-
-Brainstorming: 
-
-How to determine flag country? 
- - we will be assuming that if flag country = eez area where the vessel is detected. So we will have to count the number of vessels detected in each eez and calculate a proportion in each cell.
-

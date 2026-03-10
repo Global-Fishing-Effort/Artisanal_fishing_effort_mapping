@@ -51,16 +51,6 @@ ocean <- ne_download(scale = 50, type = 'ocean', category = 'physical',returncla
 # Defining our global grid
 
 ```{r}
-pixel_size <- 0.5
-
-# Start with global ocean
-starting_shape <- ocean
-```
-
-
-We define a global grid using pixels that are `r pixel_size` degree latitude by `r pixel_size` degree longitude. We will then aggregate all of our model feature data to these `r pixel_size`x`r pixel_size` degree pixels. We include only pixels that overlap with the ocean. Each pixel is assigned a static `pixel_id`.
-
-```{r}
 data_grid <- data.table::fread(here::here("data/model_features/global_grid.csv")) %>%
   st_as_sf(wkt = "geometry_wkt",
            crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
@@ -270,21 +260,6 @@ qs::qsave(chl_data_imputed, here("data/model_features/chl_data.qs")) # only 35 M
 ## Defining our global grid
 
 ```{r}
-pixel_size <- 1
-
-# Create polygon rectangle of globe
-# This will serve as basis of grid
-global_polygon_sf <-
-  tibble(lon = c(-180,-180,180,180,-180),
-       lat = c(-90,90,90,-90,-90))%>%
-  as.matrix() %>%
-  list(.) %>%
-  st_polygon() %>%
-  st_sfc(crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs") %>%
-  st_as_sf()
-
-# Start with global ocean
-starting_shape <- ocean
 
 data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
   st_as_sf(wkt = "geometry_wkt",

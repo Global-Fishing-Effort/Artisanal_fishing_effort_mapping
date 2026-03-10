@@ -6,7 +6,7 @@ date: "2024-12-11"
 
 # Summary 
 
-We use the data compiled in the previous scripts to fit a random forest regression model to predict the proportion of fishing vessels occurring in cells. 
+We use the data compiled in the previous scripts to fit a random forest regression model to predict the intensity of fishing vessels occurring in cells. Our response variable is the logit of the smoothed per-look vessel detection rate (detections/looks). We used the logit-transformed smoothed vessel detection rate per look (detections/looks) to reduce sampling bias arising from unequal satellite coverage.
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)

@@ -26,7 +26,7 @@ library(data.table)
 
 source(here("R/dir.R"))
 
-data_grid_raw <- read.csv(here("data/model_features/global_grid.csv"))
+data_grid_raw <- read.csv(here("data/model_features/global_grid.csv")) # made in 02_prep_eez_data.Rmd
 
 data_grid <- data_grid_raw %>%
   st_drop_geometry() %>%

@@ -8,7 +8,7 @@ editor_options:
 
 # Summary 
 
-We use the data compiled in the previous scripts to fit a random forest regression to predict the presence (1) or absence (0) of fishing vessels in every cell. We will do this for each flag country individually.  
+We use the data compiled in the previous scripts to fit a random forest classification model to predict the presence (1) or absence (0) of fishing vessels in every cell. We will do this for each flag country individually.  
 
 ## Environment
 

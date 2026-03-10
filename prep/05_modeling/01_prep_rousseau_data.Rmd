@@ -6,8 +6,6 @@ date: "2025-07-23"
 
 # Summary
 
-Here we combine the data created in the previous files/folders so that we can feed it into a prediction model. 
-
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 
@@ -22,9 +20,7 @@ grid <- read.csv(here("data/model_features/global_grid.csv"))
 
 ```
 
-Read in the vessel detection data and combine/summarise per flag country, length, and year. 
-
-Also prep the Rousseau data for eventual predictions
+Prep the Rousseau data for eventual predictions
 We need to prep Rousseau data by calculating average gross tonnage and days at sea per flag and length combinations. Using these metrics with the number of vessels, we can calculate effort once we make predictions.
 
 ```{r}

@@ -174,55 +174,6 @@ grid_sf <- st_as_sf(data_grid, coords = c("lon", "lat"), crs = 4326)
 years   <- sort(unique(mpa_data$year))
 
 
-# 
-# n_cores <- min(detectCores() - 1, length(years))
-# 
-# nearest_years_list <- mclapply(
-#   years,
-#   function(yr) {
-#     # MPAs implemented by or before this year
-#     mpa_year <- mpa_est %>%
-#       filter(!is.na(est_year), est_year <= yr)
-# 
-#     if (nrow(mpa_year) == 0) {
-#       # no MPAs yet → NA
-#       return(tibble(
-#         pixel_id = data_grid$pixel_id,
-#         year     = yr,
-#         nearest_mpa_years_since_designation = NA_integer_
-#       ))
-#     }
-# 
-#     mpa_sf <- st_as_sf(mpa_year, coords = c("lon", "lat"), crs = 4326)
-# 
-#     # nearest neighbor index for each grid cell
-#     nn <- st_nn(grid_sf, mpa_sf, k = 1, returnDist = FALSE)
-# 
-#     nn_idx <- vapply(
-#       nn,
-#       function(v) if (length(v) == 0) NA_integer_ else v[1],
-#       integer(1)
-#     )
-# 
-#     nearest_est_year <- mpa_year$est_year[nn_idx]
-# 
-#     years_since <- ifelse(
-#       is.na(nearest_est_year),
-#       NA_integer_,
-#       pmax(0L, yr - nearest_est_year)
-#     )
-# 
-#     tibble(
-#       pixel_id = data_grid$pixel_id,
-#       year     = yr,
-#       nearest_mpa_years_since_designation = years_since
-#     )
-#   },
-#   mc.cores = n_cores
-# )
-# 
-# nearest_years_timevarying <- bind_rows(nearest_years_list)
-# 
 ```
 
 

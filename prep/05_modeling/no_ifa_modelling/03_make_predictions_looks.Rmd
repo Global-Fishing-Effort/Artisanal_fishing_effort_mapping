@@ -6,7 +6,7 @@ date: "2025-08-12"
 
 # Summary
 
-Make predictions of fishing effort, without constaining to IFAs. We will however limit predictions to each flag countries' EEZ
+Make predictions of fishing effort, WITHOUT constraining to IFAs. We will however limit predictions to each flag countries' EEZ
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)

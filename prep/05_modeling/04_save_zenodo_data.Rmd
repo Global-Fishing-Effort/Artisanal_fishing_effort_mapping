@@ -6,6 +6,8 @@ date: "2024-12-11"
 
 # Summary
 
+Here we save the data from the modelling in the previous steps in concise datasets, which we then upload to Zenodo. 
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 

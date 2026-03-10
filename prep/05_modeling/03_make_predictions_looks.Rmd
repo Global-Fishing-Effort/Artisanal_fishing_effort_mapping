@@ -5,6 +5,10 @@ date: "2025-08-12"
 ---
 
 # Summary
+Here we read in each model created in step 2 and make predictions of fishing effort from those models. 
+
+We stage 1 restrict predictions to each flag state’s EEZ (Watson & Tidd, 2018; Pauly et al., 2020), which assumes domestic operation and may miss cross-border activity under access agreements or IUU in some regions. For stage 1, we treated any non-zero predicted probability as presence. Stage 2 outputs are the per-look detection rate predictions (obtained by back-transforming the logit predictions), with predictions in all cells globally within our Inshore Fishing Areas layer. We combine the two stages to obtain expected detections in each cell by multiplying the Stage 1 outputs by the per-look detection rate predictions and the number of valid satellite looks in that cell and year. Then we convert expected detections to proportions by normalizing within each country-year-length combination, ensuring the sums equal one. We then multiply the national level artisanal fishing vessel count totals (Rousseau et al., 2019, 2024) by each cell within the country-year-length combination to allocate spatially. Because artisanal models create proxy estimates of vessels via detections and predict the number of vessels in each cell, we converted predicted counts to nominal effort by multiplying by country- and length-specific days at sea and mean engine power estimates from Rousseau et al., (2019, 2024), and then applied their technological-creep adjustment (2.61% per year) for effective effort. 
+
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
@@ -133,7 +137,7 @@ env_data <- env_data %>%
 
 ```
 
-Now we need to prep our "looks" dataset 
+Now we need to prep our "looks" dataset, so that it extends back to 1950. 
 
 ```{r}
 looks_df <- qread(here("data/vessels/vessels_prop_05_deg_overpass_all.qs")) %>%
