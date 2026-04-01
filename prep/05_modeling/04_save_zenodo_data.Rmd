@@ -70,7 +70,7 @@ foreach(flag = all_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "cou
     )) %>%
     mutate(flag_country_iso3c = flag)
   
-  write.csv(all_data_fin, file.path(rdsi_dir, glue("prep/random_forest/zenodo_data/artisanal_skylight_sentinel/mapped_by_flag_country/model_preds_1950_2017_{flag}.csv")), row.names = FALSE)
+  write.csv(all_data_fin, file.path(rdsi_dir, glue("prep/random_forest/zenodo_data/artisanal_skylight_sentinel/mapped_by_flag_country_artisanal/model_preds_1950_2017_{flag}.csv")), row.names = FALSE)
 }
 
 stopCluster(cl)
@@ -78,7 +78,7 @@ stopCluster(cl)
 
 ## save as one large csv
 
-  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/zenodo_data/artisanal_skylight_sentinel/mapped_by_flag_country/"), full.names = TRUE)
+  all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/zenodo_data/artisanal_skylight_sentinel/mapped_by_flag_country_artisanal/"), full.names = TRUE)
 
     all_data <- lapply(all_files_flag, read.csv) %>%
       bind_rows()
@@ -97,7 +97,7 @@ write.csv(all_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/artisana
 
 ## Lets save the large map files as zip file as well, in the terminal:
 # cd /home/ubuntu/data_storage/prep/random_forest/zenodo_data/artisanal_skylight_sentinel/
-# zip -r mapped_by_flag_country.zip mapped_by_flag_country_artisanal
+# zip -r mapped_by_flag_country_artisanal.zip mapped_by_flag_country_artisanal_artisanal
 # zip mapped_artisanal_effort_predictions_1950_2017.zip mapped_artisanal_effort_predictions_1950_2017.csv
 
 all_data_grouped <- all_data %>% 
