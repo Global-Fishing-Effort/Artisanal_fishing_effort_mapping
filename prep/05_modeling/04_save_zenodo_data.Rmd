@@ -95,6 +95,11 @@ stopCluster(cl)
     
 write.csv(all_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/artisanal_skylight_sentinel/mapped_artisanal_effort_predictions_1950_2017.csv"), row.names = FALSE)
 
+## Lets save the large map files as zip file as well, in the terminal:
+# cd /home/ubuntu/data_storage/prep/random_forest/zenodo_data/artisanal_skylight_sentinel/
+# zip -r mapped_by_flag_country.zip mapped_by_flag_country_artisanal
+# zip mapped_artisanal_effort_predictions_1950_2017.zip mapped_artisanal_effort_predictions_1950_2017.csv
+
 all_data_grouped <- all_data %>% 
   group_by(year, flag_country_iso3c, flag_country_name, length_category, eez_sovereign_iso3c, eez_sovereign_name, fao_fishing_id, fao_major_fishing_area, sector) %>%
   summarise(eff_active_fishing_hours = sum(eff_active_fishing_hours, na.rm = TRUE), 
@@ -139,87 +144,12 @@ hist_fish_data <- qs::qread(here("data/model_features/rousseau_total_art_vessels
          prop_nom_days_modeled = modeled_nom_active_fishing_days/total_nom_days)
 
 missing_data <- hist_fish_data %>%
-  # filter(proportion_nv_modeled != 1) %>%
-  # filter(proportion_nv_modeled < 0.9999) %>% # 0 awesome! 
   filter(is.na(proportion_nv_modeled)) # ok missing a lot.
 
-write.csv(hist_fish_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/artisanal_skylight_sentinel/known_artisanal_effort_rousseau.csv"), row.names = FALSE)
+# write.csv(hist_fish_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/artisanal_skylight_sentinel/known_artisanal_effort_rousseau.csv"), row.names = FALSE) # no longer necesssary 
 
-test <- hist_fish_data %>% filter(flag_country_iso3c == "UKR", year == 1950)
 
-sum(test$modeled_nom_active_fishing_hours) # 
 
 ```
-
-
-```{r}
-test <- hist_fish_data %>%
-  filter(flag_country_iso3c %in% c("NOR", "NAM", "AUS", "NZL"))
-```
-
-Why does Norway stop in 1983? 
-Australia stops in 2016? 
-There is no New Zealand or Namibia at all? 
-
-According to supplementary info from Rousseau et al. 2019 PNAS (https://www.pnas.org/doi/10.1073/pnas.1820344116#supplementary-materials):
- - Namibia has no artisanal fishing
- - Norway only has artisanal <12m until 2015? Feels like this is a mistake that wasn't corrected? 
- - New Zealand artisanal stopped in 2010? Also feels like a mistake. Seems like they should've carried over the definiton of artisanal to the latest year.. 
- - Australia artisanal is <10m and stopped in 2014? Definitely is not true. 
-
-```{r}
-library(janitor)
-# read in published data
-rousseau_eff <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FishingCountry_LengthBoat_Gear_Sector.csv") %>% 
-  clean_names() %>%
-  filter(country %in% c("NOR", "NAM", "AUS", "NZL"),
-         sector %in% c("UP", "APW"))
-
-unique(rousseau_eff$sector) # UP only - weird
-unique(rousseau_eff$country) # [1] "AUS" "NOR" - no NZL or NAM? 
-
-test_years <- rousseau_eff %>%
-  group_by(country, year) %>% 
-  summarise(nv = sum(nv, na.rm = TRUE)) %>%
-  ungroup()
-
-# AUS to 2016, NOR to 1983 
-
-## lets look at other published data from Rousseau and see if it is the same.. maybe it is a problem with the dataset we're using? 
-options(timeout = 600)   # default is 60s; make it longer
-mapped_2017_apw <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/effort_mapped/mapped_2017_APW.csv")
-
-mapped_2017_up <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/effort_mapped/mapped_2017_UP.csv")
-saup_codes <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/SAUPtoCountry.csv") %>%
-  dplyr::select(-X)
-
-mapped_2017_apw_up <- rbind(mapped_2017_apw, mapped_2017_up) %>%
-  left_join(saup_codes)
-
-
-# AUS = 36, 
-# NZL = 554, 
-# NOR = 578, 
-# NAM = 516
-
-test_missing <- mapped_2017_apw_up %>%
- # filter(SAUP %in% c(36, 554, 578, 516))
-  filter(Country %in% c("NOR", "AUS", "NAM", "NZL")) # ok so these are all missing from 2017... just like the other dataset. I wonder if it just an artifact of what they are considering as artisanal? 
-
-test_nam <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/effort_mapped_country/mapped_516.csv") # only industrial? Weird. According to google fisheries in Namibia are mostly industrial. 
-
-test <- test_nam %>%
-  group_by(Lon, Lat) %>%
-  summarise(nom_eff = sum(NomActive, na.rm = TRUE)) %>%
-  ungroup() %>%
-  na.omit() %>%
- # filter(nom_eff > 1) %>%
-  rast(., type = "xyz")
-
-plot(test) # weird how spread out it is.. SAUP is much more concentrated in NAM EEZ, which makes sense. That is also how our industrial is. 
-
-```
-
-
 
 
