@@ -25,8 +25,6 @@ source(here("R/dir.R"))
 
 Save csv files to upload to Zenodo and the app 
 
- - We need to grab any gapfilled flags that are not in the flag level modelling from the regional level modelling 
-
 ```{r}
 
   modelled_flags_original <- str_before_first(str_after_last(list.files(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/predictions_no_ifa/"), pattern = ".qs", full.names = TRUE), "_"), "\\.qs")
