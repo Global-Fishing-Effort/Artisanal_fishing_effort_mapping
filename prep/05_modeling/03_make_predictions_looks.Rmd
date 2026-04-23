@@ -116,24 +116,6 @@ ocean_data_historical <- qs::qread(here("data/int/prediction_historical_data/hal
         mutate(gov_score = ifelse(eez_id < 99999 & is.na(gov_score), "no_data", gov_score)) %>%
     dplyr::select(-eez_sovereign, -nearest_seamount_id, -geometry_wkt) %>% 
     distinct()
-  
-  env_data_test <- env_data %>%
-    filter(eez_id == 8671, 
-           ifa == 1)
-  
-env_data_wsm <- env_data %>%
-  filter(eez_id == 8671, year == 1966) %>%
-  mutate(year = 1967) # for some reason WSM 1967 is not in the IFA data? We will just carry over values from 1966 for WSM...
-
-env_data <- env_data %>%
-  dplyr::filter(!(eez_id == 8671 & year == 1967)) %>%
-  rbind(env_data_wsm)
-  
-
-  env_data_test <- env_data %>%
-    filter(eez_id == 8671, 
-           ifa == 1, 
-           year == 1967)
 
 ```
 
@@ -216,8 +198,6 @@ global_grid <- read.csv(here("data/model_features/global_grid.csv")) %>%
   dplyr::select(lon, lat, pixel_id)
 
 
-access_data <- qs::qread(here("data/int/prediction_historical_data/art_fishing_access.qs")) # probably not necessary for artisanal? 
-
 env_data_fishing_areas <- env_data %>% 
   filter(sea_ice_present == 0,
          ifa == 1) %>%
@@ -227,8 +207,6 @@ test <- env_data %>%
   left_join(eez_lookup) %>%
   filter(eez_sovereign == "WLF")
 
-# env_grid <- env_data %>% 
-#   dplyr::select(lon, lat) %>% distinct()
 
 env_grid_fishing_areas <- env_data_fishing_areas %>% 
   dplyr::select(lon, lat) %>% distinct()
@@ -260,18 +238,10 @@ registerDoParallel(cl)
 
  foreach(flag = model_flags, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
 
-   
- # foreach(yr = years, .packages = c("dplyr", "tidyverse", "randomForest", "qs", "glue", "ranger")) %dopar% {
-# flag = "BRB"
+
  for(yr in years) {
    
-   ## uncheck this if you arent doing a full rerun 
-   # if(file.exists(file.path(rdsi_dir, glue("prep/random_forest/artisanal_skylight_sentinel/predictions/yearly/model_preds_{flag}_{yr}.qs")))){
-   #   cat("skipping", "exists")
-   #   next()
-   # }
-# 
-# flag = "USA"
+# flag = "IDN"
 # yr = 1967
 
 # get combination of categories we need to run through our models
@@ -293,9 +263,6 @@ full_data <- full_grid %>%
     mutate(looks_hat = ifelse(is.na(looks_fin), median(looks_fin, na.rm = TRUE), looks_fin)) %>% # do the median of looks in this region if still missing
   mutate(log_looks = log(looks_hat))
 
-# test <- full_data %>%
-#   distinct(lon, lat, L_hat) %>%
-#   rast(., type = "xyz") # ok cool
 
 if(nrow(full_data) == 0){
     cat("skipping", flag, yr, "check to make sure this is right")
@@ -317,20 +284,12 @@ if (length(matching_files) > 0) {
   stop("No matching file found for flag: ", flag)
 }
 
-# stage2_model <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/artisanal_skylight_sentinel/stage_2_models/pruning/stage_2_rf_train_USA_25.qs")
 
 set.seed(123)
 oos_preds <- full_data %>%
   mutate(y_hat = predict(stage2_model, data = .)$predictions) %>%
   mutate(r_hat_plus = plogis(y_hat)) %>%
   mutate(E_hat = r_hat_plus*looks_hat)
-
-
-# test <- oos_preds %>%
-#   filter(length_category == "12-24m") %>%
-#   dplyr::select(lon, lat, E_hat) %>%
-#   rast(., type = "xyz") %>%
-#   plot()
 
 ## read in stage 1 model! 
 # Get the list of matching files
@@ -347,8 +306,6 @@ if (length(matching_files) > 0) {
   stop("No matching file found for flag: ", flag)
 }
 
-# stage1_model <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/artisanal_skylight_sentinel/stage_1_models/pruning/stage_1_rf_train_USA_25.qs")
-
 set.seed(123)
 stage1_preds <- full_data %>%
   mutate(pred_presence = predict(stage1_model, data = .)$predictions[, "1"])
@@ -356,7 +313,7 @@ stage1_preds <- full_data %>%
 # # for now we will use > 0 in the EEZ to be 1
 stage_1_preds_rescale <- stage1_preds %>%
     mutate(pred_presence_rescale = case_when(
-        pred_presence > 0 ~ 1, # need to make a decision about the cut off. >=0.5 or >0?
+        pred_presence > 0 ~ 1, # use > 0
         TRUE ~ 0
     )) %>%
   mutate(pred_presence_rescale = ifelse(fao_id %in% c(48, 88, 58), 0, pred_presence_rescale)) # remove any antarctica cells for artisanal just to be safe
@@ -364,16 +321,12 @@ stage_1_preds_rescale <- stage1_preds %>%
 # “We prefer to err on the side of inclusion within a flag’s EEZ.”
 
 
-# test <- stage_1_preds_rescale %>% filter(pred_presence_rescale == 1)
-
 ## join stage 1 and 2 preds together and multiply 
 all_preds <- oos_preds %>%
   dplyr::select(lat, lon, length_category, year, flag_fin, looks_hat, E_hat) %>% # probably select lat, lon, gear, length, year, flag here?
   left_join(., stage_1_preds_rescale) %>% 
     dplyr::select(lon, lat, flag_fin, length_category, year, fao_id, eez_id, eez_sovereign, eez_country_name, looks_hat, E_hat, pred_presence_rescale) %>% 
-  left_join(access_data %>% dplyr::select(-eez_sovereign)) %>%
-  mutate(access = ifelse(is.na(access), 0, access)) %>% 
-  mutate(access = ifelse(eez_sovereign == flag, 1, access)) %>% # don't think we need access for artisanal
+  mutate(access = ifelse(eez_sovereign == flag, 1, 0)) %>% 
   mutate(pred_prop_final = E_hat*pred_presence_rescale*access) %>%
   filter(pred_prop_final > 0) %>%
   filter(!is.na(pred_prop_final)) %>%
@@ -469,8 +422,8 @@ stopCluster(cl)
 
 
 
-test_preds <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/artisanal_skylight_sentinel/predictions/model_preds_1950_2017_WSM.qs") %>%
-  filter(year == 1967) %>%
+test_preds <- qs::qread("/home/ubuntu/data_storage/prep/random_forest/artisanal_skylight_sentinel/predictions/model_preds_1950_2017_IND.qs") %>%
+  filter(year == 2017) %>%
   dplyr::group_by(lon, lat) %>%
   summarise(effort = sum(nom_active_fishing_hours, na.rm = TRUE)) %>%
   ungroup() %>% 
