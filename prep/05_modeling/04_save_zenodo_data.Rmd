@@ -97,7 +97,7 @@ write.csv(all_data, file.path(rdsi_dir, "prep/random_forest/zenodo_data/artisana
 
 ## Lets save the large map files as zip file as well, in the terminal:
 # cd /home/ubuntu/data_storage/prep/random_forest/zenodo_data/artisanal_skylight_sentinel/
-# zip -r mapped_by_flag_country_artisanal.zip mapped_by_flag_country_artisanal_artisanal
+# zip -r mapped_by_flag_country_artisanal.zip mapped_by_flag_country_artisanal_
 # zip mapped_artisanal_effort_predictions_1950_2017.zip mapped_artisanal_effort_predictions_1950_2017.csv
 
 all_data_grouped <- all_data %>% 
@@ -152,4 +152,8 @@ missing_data <- hist_fish_data %>%
 
 ```
 
+
+```{r}
+
+```
 
