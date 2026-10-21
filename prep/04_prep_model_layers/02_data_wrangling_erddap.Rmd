@@ -36,7 +36,7 @@ library(terra)
 library(ncdf4)
 library(strex)
 library(FNN)
-source(here::here("prep/04_prep_spatial_layers_model/_functions_data_wrangling_erddap.R"))
+source(here::here("prep/04_prep_model_layers/_functions_data_wrangling_erddap.R"))
 source(here("R/dir.R"))
 
 # Set the data directory. This specifies the folder in our drive where the data can be found. 
@@ -55,6 +55,8 @@ data_grid <- data.table::fread(here::here("data/model_features/global_grid.csv")
   st_as_sf(wkt = "geometry_wkt",
            crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
 
+pixel_size = 0.5
+
 ```
 
 
@@ -66,17 +68,18 @@ We use 0.25 degree data from [SST, Daily Optimum Interpolation (OI), AVHRR Only,
 # Spatially aggregate SST and SST anomaly data
 spatially_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
                                         spatial_aggregation = data_grid,
-                                        years = 2014:2024,  # really only need these years
+                                        years = 1982:2024,  # really only need these years
                                         run_parallel = TRUE)
 ```
 
 ```{r eval = params$aggregate_data}
-# Spatially aggregate SST and SST anomaly data
+# Spatially aggregate SST data
 
 temporally_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
                                          temporal_aggregation = "year",
                                          run_parallel = TRUE,
-                                         years_per_chunk = 5)
+                                         years_per_chunk = 5,
+                                         sd_from_monthly = TRUE)
 
 ```
 
@@ -88,7 +91,7 @@ There are cells which are missing SST information. For these, we should fill in 
 
 sst_data <- sst_data_raw %>%
   dplyr::select(-anom_sst_c_mean, -anom_sst_c_sd) %>%
-  filter(year %in% c(2009:2024)) %>%
+  # filter(year %in% c(2009:2024)) %>%
     mutate(sst_c_mean = ifelse(sst_c_mean == 0 & is.na(sst_c_sd), NA, sst_c_mean)) %>%
   left_join(data_grid %>% st_drop_geometry())
 
@@ -144,11 +147,9 @@ sum(is.na(sst_data_imputed$sst_c_mean))  # Should be 0
 nrow(sst_data_imputed) == nrow(sst_data) # TRUE
 
 ## save 
-# qs::qsave(sst_data_imputed, here("data/model_features/sst_data.qs")) # only 35 MB - cool 
+qs::qsave(sst_data_imputed, here("data/model_features/sst_data.qs")) # only 95 MB - cool 
 
-write.csv(sst_data_imputed, here("data/model_features/sst_data.csv"), row.names = FALSE) # only 80 mb 
 
-## might need to consider filling in the pixel ids with no information.. right now we are just filling in the cells we could grab from errdap. E.g. there are some pixel ids like 1 that don't exist in the raw data. So we would need to cross those pixel ids with each year and then fill in with the nearest neighbor pixel.
 ```
 
 
@@ -172,7 +173,8 @@ spatially_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
 temporally_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
                                          temporal_aggregation = "year",
                                          run_parallel = TRUE,
-                                         years_per_chunk = 5)
+                                         years_per_chunk = 5,
+                                         sd_from_monthly = FALSE)
 
 ```
 
@@ -184,7 +186,7 @@ chl_data_raw <- lapply(list.files(here("data/model_features/erdMH1chlamday"), fu
         bind_rows()
 
 chl_data <- chl_data_raw %>%
-  filter(year %in% c(2009:2024)) %>%
+  # filter(year %in% c(2009:2024)) %>%
   mutate(chl_mg_per_m3_mean = ifelse(chl_mg_per_m3_mean == 0 & is.na(chl_mg_per_m3_sd), NA, chl_mg_per_m3_mean)) %>%
  # left_join(data_grid %>% st_drop_geometry()) %>%
   mutate(chl_mg_per_m3_sd = ifelse(!is.na(chl_mg_per_m3_mean) & is.na(chl_mg_per_m3_sd), 0, chl_mg_per_m3_sd)) # if sd is NA but there is a mean, make it 0, meaning there was no variation.
@@ -248,72 +250,9 @@ sum(is.na(chl_data_imputed$chl_mg_per_m3_mean))  # Should be 0
 nrow(chl_data_imputed) == nrow(chl_data_full) # TRUE
 
 # ## save 
-qs::qsave(chl_data_imputed, here("data/model_features/chl_data.qs")) # only 35 MB - cool 
+qs::qsave(chl_data_imputed, here("data/model_features/chl_data.qs")) # only 42 MB - cool 
 
 # write.csv(chl_data_imputed, here("data/model_features/chl_data.csv"), row.names = FALSE) # too big for github; >100 mb
-
-```
-
-
-# Code to prep the same data to a 1 degree by 1 degree grid if needed
-
-## Defining our global grid
-
-```{r}
-
-data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
-  st_as_sf(wkt = "geometry_wkt",
-           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs") %>%
-              mutate(pixel_area_m2 = sf::st_area(geometry_wkt) %>%
-                 units::drop_units())
-
-```
-
-Prep 2015-2024 SST, CHL, data, and save
-
-```{r}
-## start with prepping 1 by 1 sst data for 2015 only. Then we will appead it onto the existing data downloaded from the paper
-# Spatially aggregate SST and SST anomaly data
-spatially_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
-                                        spatial_aggregation = data_grid,
-                                        years = 2016:2024, # choose years you want to run
-                                        run_parallel = TRUE)
-
-
-# temporally aggregate SST and SST anomaly data
-
-temporally_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
-                                         temporal_aggregation = "year",
-                                         run_parallel = TRUE,
-                                         years_per_chunk = 5)
-
-## now lets merge them all together
-files <- list.files(here("data/model_features/deg_1_x_1/ncdcOisst21Agg_LonPM180/"), full.names = TRUE)
-
-all_sst <- lapply(files, read.csv) %>%
-  bind_rows() 
-
-write.csv(all_sst, here("data/model_features/deg_1_x_1/errdap_sst.csv"), row.names = FALSE)
-
-
-# Spatially aggregate chl data for 2015
-spatially_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
-                                        spatial_aggregation = data_grid,
-                                        years = 2016:2024, # choose years you want to run
-                                        run_parallel = TRUE)
-
-temporally_aggregate_errdap_data_wrapper(dataset_name = "erdMH1chlamday",
-                                         temporal_aggregation = "year",
-                                         run_parallel = TRUE,
-                                         years_per_chunk = 5)
-## now lets merge them all together
-files <- list.files(here("data/model_features/deg_1_x_1/erdMH1chlamday/"), full.names = TRUE)
-
-all_chl <- lapply(files, read.csv) %>%
-  bind_rows() 
-
-write.csv(all_chl, here("data/model_features/deg_1_x_1/errdap_chl.csv"), row.names = FALSE)
-
 
 ```
 
