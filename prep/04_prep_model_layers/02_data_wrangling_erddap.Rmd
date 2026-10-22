@@ -65,10 +65,14 @@ pixel_size = 0.5
 We use 0.25 degree data from [SST, Daily Optimum Interpolation (OI), AVHRR Only, Version 2.1, Final, Global, 0.25°, 1981-present, Lon+/-180](https://coastwatch.pfeg.noaa.gov/erddap/info/ncdcOisst21Agg_LonPM180/index.html). These data download ~25x as fast and are much faster to spatially aggregate.
 
 ```{r eval = params$aggregate_data}
+
+years = unique(year(as.Date(sub("\\.csv$", "", c(bad_half$file, bad_one$file)))))
+
+
 # Spatially aggregate SST and SST anomaly data
 spatially_aggregate_errdap_data_wrapper(dataset_name = "ncdcOisst21Agg_LonPM180",
                                         spatial_aggregation = data_grid,
-                                        years = 1982:2024,  # really only need these years
+                                        years = years,  # really only need these years
                                         run_parallel = TRUE)
 ```
 

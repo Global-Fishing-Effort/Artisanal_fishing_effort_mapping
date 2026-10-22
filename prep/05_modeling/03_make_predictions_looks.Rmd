@@ -56,7 +56,7 @@ model_data <- readRDS(here("data/model_features/prepared_data_0.5.rds")) %>%
   
   chl_data <- qs::qread(here("data/model_features/chl_data.qs"))
   
-  sst_data <- read.csv(here("data/model_features/sst_data.csv"))
+  sst_data <- qread(here("data/model_features/sst_data.qs"))
 
   wind_data <- qs::qread(here("data/model_features/wind_data.qs"))
 
@@ -69,8 +69,8 @@ ocean_data_historical <- qs::qread(here("data/int/prediction_historical_data/hal
   rbind(qs::qread(here("data/int/prediction_historical_data/half_degree/chl_yearly_1981_2014.qs"))) %>%
   left_join(qs::qread(here("data/int/prediction_historical_data/half_degree/sst_yearly_1950_1980.qs")) %>% 
               rbind(qs::qread(here("data/int/prediction_historical_data/half_degree/sst_yearly_1981_2014.qs"))), by = c("pixel_id", "year")) %>% 
-  left_join(qs::qread(here("data/int/prediction_historical_data/half_degree/wind_yearly_1950_2014.qs")) %>% mutate(year = as.numeric(year)), by = c("pixel_id", "year")) %>%
-  dplyr::select(-pixel_area_m2.x, -pixel_area_m2.y)
+  left_join(qs::qread(here("data/int/prediction_historical_data/half_degree/wind_yearly_1950_1980.qs")) %>% 
+              rbind(qs::qread(here("data/int/prediction_historical_data/half_degree/wind_yearly_1981_2014.qs"))), by = c("pixel_id", "year")) %>%   dplyr::select(-pixel_area_m2.x, -pixel_area_m2.y)
 
   ocean_data_all <- ocean_data %>%
     rbind(ocean_data_historical) %>%
@@ -103,11 +103,11 @@ ocean_data_historical <- qs::qread(here("data/int/prediction_historical_data/hal
  #   rast(., type = "xyz")
  #  plot(test_ice)
  
-   mpa_data <- qs::qread(here("data/model_features/mpa/mpa_data_all.qs")) 
+  #  mpa_data <- qs::qread(here("data/model_features/mpa/mpa_data_all.qs")) 
   
   env_data <- spatial_data %>%
     left_join(ifa_df) %>%
-    left_join(mpa_data) %>%
+   # left_join(mpa_data) %>%
     left_join(sea_ice_df) %>%
     left_join(ocean_data_all) %>% # cool.
     left_join(elnino) %>%

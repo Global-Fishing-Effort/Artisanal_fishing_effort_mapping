@@ -183,7 +183,7 @@ tmp_data_directory <- glue::glue("{data_directory}/remss/clean/spatially_aggrega
 if(run_parallel) plan(multisession) else plan(sequential)
 
 # Create sequence of start years for each 5-year chunk
-start_years <- seq(2014, 2024, by = 5) # only need these years
+start_years <- seq(1993, 2024, by = 5) # only need these years
 
 # Process each 5-year chunk
 for(start_year in start_years) {
@@ -246,10 +246,8 @@ Check to see if any cells are missing information and if they are fill in with n
 wind_data_raw <- lapply(list.files(here("data/model_features/remss_wind"), full.names = TRUE), read.csv) %>%
         bind_rows()
 
-wind_data <- wind_data_raw %>%
-  filter(year %in% c(2009:2024)) 
-# %>%
-  #full_join(data_grid %>% st_drop_geometry()) 
+wind_data <- wind_data_raw
+
 
 all_pixels <- data_grid %>% st_drop_geometry() %>% select(pixel_id)
 all_years <- wind_data %>% distinct(year)
@@ -309,183 +307,6 @@ sum(is.na(wind_data_imputed$wind_speed_ms_mean))  # Should be 0
 
 nrow(wind_data_imputed) == nrow(wind_data_full) # TRUE
 
-qs::qsave(wind_data_imputed, here("data/model_features/wind_data.qs")) # only ~30 MB - cool 
+qs::qsave(wind_data_imputed, here("data/model_features/wind_data.qs")) # only ~64 MB - cool 
 
 ```
-
-
-# Spatially and temporally aggregated data to 1 by 1 degree cells if needed
-
-## Defining our global grid
-
-```{r}
-pixel_size <- 1
-
-# Create polygon rectangle of globe
-# This will serve as basis of grid
-global_polygon_sf <-
-  tibble(lon = c(-180,-180,180,180,-180),
-       lat = c(-90,90,90,-90,-90))%>%
-  as.matrix() %>%
-  list(.) %>%
-  st_polygon() %>%
-  st_sfc(crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs") %>%
-  st_as_sf()
-
-# Start with global ocean
-starting_shape <- ocean
-
-data_grid <- data.table::fread(here::here("data/model_features/deg_1_x_1/global_grid.csv")) %>%
-  st_as_sf(wkt = "geometry_wkt",
-           crs = "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs") %>%
-              mutate(pixel_area_m2 = sf::st_area(geometry_wkt) %>%
-                 units::drop_units())
-
-```
-
-
-```{r}
-# Process data; spatially aggregate
-# Do it in parallel?
-run_parallel <- TRUE
-
-
-tmp_data_directory <- glue::glue("{data_directory}/remss/clean/spatially_aggregated_{pixel_size}_degree")
- if(!dir.exists(tmp_data_directory)) dir.create(tmp_data_directory)
- if(run_parallel) plan(multisession) else plan(sequential)
-
-years = 2014:2024 # only need these years
-
- pattern <- paste(years, collapse = "|")
- 
-list.files(glue("{data_directory}/remss/wind-ccmp"), pattern = pattern) %>%
-   future_map_dfr(function(tmp_file_name){
-         tryCatch({
-     
-     # tmp_file_name <- "wind_1993-03-07.nc"
-     date_tmp <- tmp_file_name %>%
-       # Extract date
-       stringr::str_replace(glue::glue("wind_"),"") %>% 
-       stringr::str_remove(".nc") %>%
-       lubridate::date()
-     
-     processed_file_name <- glue::glue("{tmp_data_directory}/{date_tmp}.csv")
-     
-          message(glue::glue("Processing file: {tmp_file_name}"))
-     
-     # If already processed, don't do it again
-     if(file.exists(processed_file_name)) {
-       message(glue::glue("File already processed: {processed_file_name}"))
-       return()
-     }
-     
- glue::glue("{data_directory}/remss/wind-ccmp/{tmp_file_name}") %>%
-       stars::read_ncdf() %>%
-       # Calculate wind speed from u and v components, using pythagorean theorum
-       dplyr::mutate(wind_speed_m_s = sqrt(uwnd^2 + vwnd^2)) %>%
-       # Get rid of these
-       dplyr::select(-uwnd,-vwnd,-nobs) %>% 
-       # Data are for every 6 hours, so take mean for entire day
-       aggregate(FUN = mean, by = "1 day") %>% 
-       # Convert stars to raster, so we can use exactextractr::exact_extract
-       as("Raster") %>%
-       # Need to rotate from 0-360 to -180-180, since original NC is provided in 0-360
-       raster::rotate() %>%
-       # Let's spatially aggregate by taking the mean value for each of our pixels
-       exactextractr::exact_extract(data_grid,
-                                    # From the help: "mean - the mean cell value, weighted by the fraction of each cell that is covered by the polygon"
-                                    "mean",
-                                    # Include pixel_id column so we can match on it later
-                                    append_cols = "pixel_id",
-                                    progress = FALSE) %>% 
-       # Don't save data that are just NAs
-       dplyr::filter(!dplyr::if_all(-c(pixel_id),is.na)) %>%
-       dplyr::rename(wind_speed_ms_mean = mean) %>%
-       dplyr::mutate(date = date_tmp) %>%
-       data.table::fwrite(processed_file_name)
-     return(NULL)
-
-    }, error = function(e) {
-      # Log the error and skip the file
-      message(glue::glue("Error processing file {tmp_file_name}: {e$message}"))
-      return(NULL)
-    })
-   }, .options = furrr_options(globals=c("data_directory","data_grid","tmp_data_directory"),
-                               seed = 101),.progress=TRUE)
-
-
-# temporally aggregate data 
-
-run_parallel <- TRUE
-
-tmp_data_directory <- glue::glue("{data_directory}/remss/clean/spatially_aggregated_{pixel_size}_degree")
-
-if(run_parallel) plan(multisession) else plan(sequential)
-
-# Create sequence of start years for each 5-year chunk
-start_years <- seq(2014, 2024, by = 5)
-
-# Process each 5-year chunk
-for(start_year in start_years) {
-  # start_year = 1993
-  end_year <- min(start_year + 4, 2024)  # Ensure we don't go beyond 2024
-  years_to_process <- start_year:end_year
-  
-  # Get files for this 5-year chunk
-  chunk_files <- list.files(tmp_data_directory, pattern = paste0(years_to_process, collapse = "|"))
-  
-chunk_data <- chunk_files %>% 
-  future_map(function(file_temp) {
-    # Construct the full path
-    file_path <- glue::glue("{tmp_data_directory}/{file_temp}")
-    
-    # Read the file
-    data <- data.table::fread(file_path)
-    
-    # Check if the file has rows
-    if (nrow(data) == 0) {
-      return(NULL)  # Return NULL for files with no rows
-    }
-    
-    # Return the data if it has rows
-    data
-  }, .options = furrr_options(globals = c("tmp_data_directory"),
-                               seed = 101), 
-     .progress = TRUE) %>%
-  
-  # Remove NULL entries (from files with no rows)
-  purrr::compact() %>%
-
-  # Combine the data into one table
-  data.table::rbindlist() %>%
-
-  # Transform and process
-  collapse::ftransform(year = lubridate::year(date)) %>%
-  dplyr::select(-date) %>%
-  dplyr::rename_with(~ gsub('_mean', '', .x)) %>%
-  collapse::fgroup_by(pixel_id, year) %>% {
-    collapse::add_vars(
-      collapse::add_stub(collapse::fmean(., keep.group_vars = TRUE), "_mean", pre = FALSE, cols = -c(1, 2)),
-      collapse::add_stub(collapse::fsd(., keep.group_vars = FALSE), "_sd", pre = FALSE)
-    )
-  }
-  
-  data.table::fwrite(chunk_data, here::here(glue::glue("data/model_features/deg_1_x_1/remss_wind/wind_{start_year}_{end_year}.csv")))
-
-  
-  # Clear chunk data to free memory
-  rm(chunk_data)
-  gc()
-}
-
-
-## now lets merge them all together
-files <- list.files(here("data/model_features/deg_1_x_1/remss_wind/"), full.names = TRUE)
-
-all_wind <- lapply(files, read.csv) %>%
-  bind_rows() 
-
-write.csv(all_wind, here("data/model_features/deg_1_x_1/remss_wind.csv"), row.names = FALSE)
-
-```
-

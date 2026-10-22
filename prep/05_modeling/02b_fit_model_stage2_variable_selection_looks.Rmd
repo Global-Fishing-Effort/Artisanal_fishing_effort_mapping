@@ -65,7 +65,7 @@ model_data <- qread(here("data/vessels/vessels_prop_05_deg_overpass_all.qs")) %>
   global_grid <- read.csv(here("data/model_features/global_grid.csv"))
  
 
-  ocean_data <- read.csv(here("data/model_features/sst_data.csv")) %>%
+  ocean_data <- qread(here("data/model_features/sst_data.qs")) %>%
     left_join(qs::qread(here("data/model_features/chl_data.qs"))) %>%
     left_join(qs::qread(here("data/model_features/wind_data.qs"))) %>%
     dplyr::select(-pixel_area_m2)
@@ -79,14 +79,14 @@ model_data <- qread(here("data/vessels/vessels_prop_05_deg_overpass_all.qs")) %>
     left_join(read.csv(here("data/model_features/seamounts.csv")), by = "pixel_id") %>% 
    crossing(., year = c(2009:2024)) 
   
-    
-  mpa_data <- qs::qread(here("data/model_features/mpa/mpa_data_all.qs")) %>% 
-    filter(year >= 2009)
+  #   
+  # mpa_data <- qs::qread(here("data/model_features/mpa/mpa_data_all.qs")) %>% 
+  #   filter(year >= 2009)
   
   
   env_data <- spatial_data %>%
     left_join(ocean_data) %>% # cool.
-    left_join(mpa_data) %>%
+   # left_join(mpa_data) %>%
     left_join(elnino) %>%
     left_join(pdo) %>%
     left_join(world_bank, by = c("eez_id")) %>%
@@ -138,9 +138,10 @@ full_model_formula <- formula(
     nearest_seamount_distance_m + 
     # Year effect
     year + 
-    log_looks +     
-    nearest_mpa_distance_m +
-    nearest_mpa_years_since_designation
+    log_looks
+  # +     
+  #   nearest_mpa_distance_m +
+  #   nearest_mpa_years_since_designation
 )
 
 hist_fish_data <- qs::qread(here("data/model_features/rousseau_total_art_vessels.qs")) %>%
@@ -275,7 +276,7 @@ train <- model_data_flag[samp, ]
 test <- model_data_flag[-samp, ]
 
 
-if(!file.exists(glue(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_2_models/pruning/stage_2_rf_train_{flag}_27.qs")))){
+if(!file.exists(glue(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_2_models/pruning/stage_2_rf_train_{flag}_25.qs")))){
 tic()
   model <- ranger(
   formula = full_model_formula,
@@ -290,7 +291,7 @@ tic()
 toc() 
 }else{
   
-  model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_2_models/pruning/stage_2_rf_train_{flag}_27.qs")))
+  model <- qs::qread(glue(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/stage_2_models/pruning/stage_2_rf_train_{flag}_25.qs")))
   
 }
 
