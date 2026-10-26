@@ -490,7 +490,7 @@ registerDoParallel(cl)
 
 foreach(flag = stage_1_flags, .packages = c("dplyr", "tidyr", "randomForest", "qs", "glue", "tictoc", "strex", "stats", "ranger", "PRROC")) %dopar% {
 
-#  flag = "BRB"
+#  flag = "ISL"
   flag_files <- list.files(stage_1_path, pattern = glue("_{flag}_"))
   # select the model with the next to lowest number of variables. E.g., if the final model run for ZAF is 17, then we want to grab the model with the next to lowest number of variables, which is 19. 
   n_variables <- as.numeric(str_before_first(str_after_last(flag_files, "_"), "\\."))
@@ -555,4 +555,7 @@ stopCluster(cl)
 
 ```
 
+```{r}
+
+```
 
