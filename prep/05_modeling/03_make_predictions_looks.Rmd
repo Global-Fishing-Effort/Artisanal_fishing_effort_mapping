@@ -397,41 +397,114 @@ days_to_hours_conversion <- qs::qread(here("data/int/hours_to_days_conversion_0.
   rename(lon = x, lat = y) %>%
   left_join(global_grid)
 
+rousseau_art_hours <- read.csv("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FishingCountry_LengthBoat_Gear_Sector.csv") %>%
+  clean_names() %>%
+  filter(!is.na(length_category), sector %in% c("APW", "UP")) %>%
+  group_by(flag_fin = country, length_category, year) %>%
+  summarise(r_nom_hours = sum(nom_active_hours, na.rm = TRUE),
+            r_eff_hours = sum(eff_active_hours, na.rm = TRUE),
+            .groups = "drop")
+
 cl <- makeCluster(40)  # could probably increase this? 
 registerDoParallel(cl)
 
 foreach(flag = model_flags, .packages = c("qs", "dplyr", "tidyverse", "glue", "countrycode")) %dopar% {
-  # flag = "BRB"
+  # flag = "ARG"
   
   all_files_flag <- list.files(file.path(rdsi_dir, "prep/random_forest/artisanal_skylight_sentinel/predictions/yearly/"), pattern = flag, full.names = TRUE)
   
     # Skip iteration if no files are found
-  if (length(all_files_flag) == 0) next
+  if (length(all_files_flag) == 0) return(NULL)
   
   # hours / hours/day = hours * day/hours = days
   # days*(hours/day) = hours
 
+  # all_data_flag <- lapply(all_files_flag, qread) %>%
+  #   bind_rows() %>%
+  #   left_join(eez_lookup) %>%
+  #   mutate(flag_country_name = countrycode(flag_fin, origin = "iso3c", destination = "country.name")) %>%
+  #   dplyr::select(pixel_id, lon, lat, year, flag_fin, length_category, eez_sovereign, eez_country_name, fao_id, fao_major_fishing_area, nv, sector) %>%
+  #   left_join(hist_fish_data %>%
+  #               dplyr::select(-nv)) %>% 
+  #     mutate(nom_active_fishing_days = nv*days_at_sea*mean_engine_p) %>% 
+  # mutate(eff_active_fishing_days = nom_active_fishing_days * (1.0261 ^ (year - 1950))) %>%
+  #       left_join(., days_to_hours_conversion) %>%
+  #   mutate(nom_active_fishing_hours = nom_active_fishing_days*mean,
+  #          eff_active_fishing_hours = eff_active_fishing_days*mean) %>%
+  #       rename(flag_country_iso3c = flag_fin, eez_sovereign_iso3c = eez_sovereign, eez_sovereign_name = eez_country_name, fao_fishing_id = fao_id) %>%
+  #   left_join(data_grid_area) %>%
+  #   mutate(pixel_area_km2 = pixel_area_m2/1000000) %>%
+  #   mutate(nv_km2 = nv/pixel_area_km2,
+  #          eff_days_km2 = eff_active_fishing_days/pixel_area_km2,
+  #          nom_days_km2 = nom_active_fishing_days/pixel_area_km2,
+  #          eff_hours_km2 = eff_active_fishing_hours/pixel_area_km2,
+  #          nom_hours_km2 = nom_active_fishing_hours/pixel_area_km2) %>% # calculate nv per km2 here
+  #   dplyr::select(-days_at_sea, -mean_engine_p, -mean, -nom_active_days, -eff_active_days, -p, -gt)
+  # 
+  
+  
   all_data_flag <- lapply(all_files_flag, qread) %>%
     bind_rows() %>%
-    left_join(eez_lookup) %>%
+    left_join(eez_lookup, by = "eez_sovereign") %>%
     mutate(flag_country_name = countrycode(flag_fin, origin = "iso3c", destination = "country.name")) %>%
-    dplyr::select(pixel_id, lon, lat, year, flag_fin, length_category, eez_sovereign, eez_country_name, fao_id, fao_major_fishing_area, nv, sector) %>%
-    left_join(hist_fish_data %>%
-                dplyr::select(-nv)) %>% 
-      mutate(nom_active_fishing_days = nv*days_at_sea*mean_engine_p) %>% 
-  mutate(eff_active_fishing_days = nom_active_fishing_days * (1.0261 ^ (year - 1950))) %>%
-        left_join(., days_to_hours_conversion) %>%
-    mutate(nom_active_fishing_hours = nom_active_fishing_days*mean,
-           eff_active_fishing_hours = eff_active_fishing_days*mean) %>%
-        rename(flag_country_iso3c = flag_fin, eez_sovereign_iso3c = eez_sovereign, eez_sovereign_name = eez_country_name, fao_fishing_id = fao_id) %>%
+    dplyr::select(pixel_id, lon, lat, year, flag_fin, flag_country_name, length_category,
+                  eez_sovereign, eez_country_name, fao_id, fao_major_fishing_area, nv, sector) %>%
+    left_join(hist_fish_data %>% dplyr::select(-nv)) %>%   # same keys as before, since nv matches
+    left_join(rousseau_art_hours,
+              by = c("flag_fin", "length_category", "year")) %>%
+    # vessels -> days (matches Rousseau by construction)
+    mutate(nom_active_fishing_days = nv * days_at_sea * mean_engine_p,
+           eff_active_fishing_days = nom_active_fishing_days * eff_active_days / nom_active_days) %>%
+    # days -> hours using spatial factors
+    left_join(days_to_hours_conversion %>%
+                dplyr::select(lon, lat, length_category, hrs_per_day = mean),
+              by = c("lon", "lat", "length_category")) %>%
+    group_by(length_category) %>%
+    mutate(hrs_per_day = coalesce(hrs_per_day, median(hrs_per_day, na.rm = TRUE))) %>%
+    ungroup() %>%
+    mutate(nom_active_fishing_hours = nom_active_fishing_days * hrs_per_day,
+           eff_active_fishing_hours = eff_active_fishing_days * hrs_per_day) %>%
+    # rescale hours within each segment to Rousseau totals
+    group_by(flag_fin, length_category, year, sector) %>%
+    mutate(tot_nom_h = sum(nom_active_fishing_hours, na.rm = TRUE),
+           tot_eff_h = sum(eff_active_fishing_hours, na.rm = TRUE),
+           nom_active_fishing_hours = if_else(tot_nom_h > 0,
+                                              nom_active_fishing_hours * r_nom_hours / tot_nom_h, 0),
+           eff_active_fishing_hours = if_else(tot_eff_h > 0,
+                                              eff_active_fishing_hours * r_eff_hours / tot_eff_h, 0)) %>%
+    ungroup() %>%
+    dplyr::select(-tot_nom_h, -tot_eff_h, -r_nom_hours, -r_eff_hours, -hrs_per_day,
+                  -days_at_sea, -mean_engine_p, -nom_active_days, -eff_active_days, -p, -gt) %>%
+    rename(flag_country_iso3c = flag_fin, eez_sovereign_iso3c = eez_sovereign,
+           eez_sovereign_name = eez_country_name, fao_fishing_id = fao_id) %>%
     left_join(data_grid_area) %>%
-    mutate(pixel_area_km2 = pixel_area_m2/1000000) %>%
-    mutate(nv_km2 = nv/pixel_area_km2,
-           eff_days_km2 = eff_active_fishing_days/pixel_area_km2,
-           nom_days_km2 = nom_active_fishing_days/pixel_area_km2,
-           eff_hours_km2 = eff_active_fishing_hours/pixel_area_km2,
-           nom_hours_km2 = nom_active_fishing_hours/pixel_area_km2) %>% # calculate nv per km2 here
-    dplyr::select(-days_at_sea, -mean_engine_p, -mean, -nom_active_days, -eff_active_days, -p, -gt)
+    mutate(pixel_area_km2 = pixel_area_m2 / 1e6,
+           nv_km2        = nv / pixel_area_km2,
+           eff_days_km2  = eff_active_fishing_days / pixel_area_km2,
+           nom_days_km2  = nom_active_fishing_days / pixel_area_km2,
+           eff_hours_km2 = eff_active_fishing_hours / pixel_area_km2,
+           nom_hours_km2 = nom_active_fishing_hours / pixel_area_km2)
+  
+    # ## test against Rousseau data to see if nv matches
+    r_test <- fread("https://data.imas.utas.edu.au/attachments/1241a51d-c8c2-4432-aa68-3d2bae142794/TotalEffortby_FGroup_FishingCountry_Sector.csv") %>%
+      filter(Country == "ARG",
+             Sector != "I",
+             Year == 2010)
+
+    sum(r_test$NV) # 385.0088
+    sum(r_test$NomActiveHours) # 181047052
+
+    all_data_flag %>%
+      filter(year == 2010) %>%
+      pull(nv) %>%
+      sum() # 385.0088
+
+      all_data_flag %>%
+      filter(year == 2010) %>%
+      pull(nom_active_fishing_hours) %>%
+      sum() # 181047052
+      ## cool. matches now. 
+
   
   qs::qsave(all_data_flag, file.path(rdsi_dir, glue("prep/random_forest/artisanal_skylight_sentinel/predictions/model_preds_1950_2017_{flag}.qs")))
 }
